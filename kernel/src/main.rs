@@ -9,25 +9,37 @@ use bootloader_api::{
 };
 
 use graphics::framebuffer::FrameBufferWriter;
+use graphics::text::TextWriter;
 
 entry_point!(kernel_main);
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
-        let mut writer = FrameBufferWriter::new(framebuffer);
+        let mut framebuffer = FrameBufferWriter::new(framebuffer);
 
         // NOVA background.
-        writer.clear(18, 18, 22);
+        framebuffer.clear(18, 18, 22);
 
-        // Test rectangle.
-        writer.draw_rect(
-            100,
-            100,
-            400,
-            200,
-            40,
-            80,
-            180,
+        // Give the text renderer ownership of the framebuffer.
+        let mut text = TextWriter::new(framebuffer);
+
+        // NOVA title.
+        text.set_position(60, 60);
+        text.set_scale(4);
+        text.set_color(80, 160, 255);
+        text.write_str("NOVA OS");
+
+        // System information.
+        text.set_position(60, 130);
+        text.set_scale(2);
+        text.set_color(235, 235, 245);
+
+        text.write_str(
+            "KERNEL INITIALIZED\n\
+             ARCHITECTURE: X86_64\n\
+             DISPLAY: 1280X720\n\
+             STATUS: RUNNING\n\n\
+             NOVA> _",
         );
     }
 

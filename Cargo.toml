@@ -1,0 +1,9 @@
+[workspace]
+resolver = "3"
+members = ["kernel", "bootloader"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

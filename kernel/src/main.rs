@@ -1,7 +1,9 @@
 #![no_std]
 #![no_main]
+#![feature(abi_x86_interrupt)]
 
 mod graphics;
+mod interrupts;
 
 use bootloader_api::{
     entry_point,
@@ -15,21 +17,17 @@ entry_point!(kernel_main);
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
-        let mut framebuffer = FrameBufferWriter::new(framebuffer);
+        let framebuffer = FrameBufferWriter::new(framebuffer);
 
-        // NOVA background.
-        framebuffer.clear(18, 18, 22);
-
-        // Give the text renderer ownership of the framebuffer.
         let mut text = TextWriter::new(framebuffer);
 
-        // NOVA title.
+        // Clear the bootloader output.
+        text.set_background(18, 18, 22);
         text.set_position(60, 60);
         text.set_scale(4);
         text.set_color(80, 160, 255);
         text.write_str("NOVA OS");
 
-        // System information.
         text.set_position(60, 130);
         text.set_scale(2);
         text.set_color(235, 235, 245);
@@ -38,9 +36,22 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             "KERNEL INITIALIZED\n\
              ARCHITECTURE: X86_64\n\
              DISPLAY: 1280X720\n\
-             STATUS: RUNNING\n\n\
-             NOVA> _",
+             INTERRUPTS: INITIALIZING...\n\
+             IDT: LOADING...\n",
         );
+
+        // Initialize the Interrupt Descriptor Table.
+        interrupts::init();
+
+        // Trigger CPU breakpoint exception #3.
+        x86_64::instructions::interrupts::int3();
+
+        // If execution reaches this line, the IDT handler worked.
+        text.set_color(80, 220, 120);
+        text.write_str("INTERRUPT TEST: PASSED\n");
+
+        text.set_color(235, 235, 245);
+        text.write_str("NOVA KERNEL IS ALIVE\n");
     }
 
     loop {

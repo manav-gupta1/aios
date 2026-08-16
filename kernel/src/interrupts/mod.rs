@@ -1,4 +1,3 @@
-pub mod pit;
 
 use pic8259::ChainedPics;
 use x86_64::structures::idt::{
@@ -79,8 +78,8 @@ pub fn init() {
         (*pics).write_masks(0xFC, 0xFF);
     }
 
-    // Initialize 8254 Programmable Interval Timer at 100 Hz
-    pit::init(pit::TIMER_FREQUENCY_HZ);
+    // Initialize 8254 Programmable Interval Timer at 100 Hz using TimerDriver
+    crate::drivers::timer::TimerDriver::init(crate::drivers::timer::TIMER_FREQUENCY_HZ);
 
     x86_64::instructions::interrupts::enable();
 }
@@ -97,7 +96,8 @@ extern "x86-interrupt" fn invalid_opcode_handler(
     if (stack_frame.code_segment.0 & 3) == 3 {
         // User space fault - terminate user process safely
         crate::console::write_str("\n[Fault] User process error: Invalid Opcode Exception (terminating task)\n");
-        crate::syscall::syscall_dispatch(crate::syscall::SYS_EXIT, 1, 0, 0, stack_frame.code_segment.0 as u64, core::ptr::null_mut());
+        crate::process::PROCESS_TABLE.lock().exit_process(crate::process::current_pid(), 1);
+        crate::task::scheduler::exit_current_task();
     } else {
         loop {
             core::hint::spin_loop();
@@ -121,7 +121,8 @@ extern "x86-interrupt" fn gpf_handler(
     if (stack_frame.code_segment.0 & 3) == 3 {
         // User space fault - terminate user process safely
         crate::console::write_str("\n[Fault] User process error: General Protection Fault (terminating task)\n");
-        crate::syscall::syscall_dispatch(crate::syscall::SYS_EXIT, 1, 0, 0, stack_frame.code_segment.0 as u64, core::ptr::null_mut());
+        crate::process::PROCESS_TABLE.lock().exit_process(crate::process::current_pid(), 1);
+        crate::task::scheduler::exit_current_task();
     } else {
         loop {
             core::hint::spin_loop();
@@ -147,7 +148,8 @@ extern "x86-interrupt" fn page_fault_handler(
     if (stack_frame.code_segment.0 & 3) == 3 {
         // User space fault - terminate user process safely
         crate::console::write_str("\n[Fault] User process error: Page Fault (terminating task)\n");
-        crate::syscall::syscall_dispatch(crate::syscall::SYS_EXIT, 1, 0, 0, stack_frame.code_segment.0 as u64, core::ptr::null_mut());
+        crate::process::PROCESS_TABLE.lock().exit_process(crate::process::current_pid(), 1);
+        crate::task::scheduler::exit_current_task();
     } else {
         loop {
             x86_64::instructions::hlt();
@@ -212,7 +214,7 @@ pub extern "C" fn schedule_tick_handler(current_rsp: usize) -> usize {
         (*pics).notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
     }
 
-    crate::task::scheduler::tick(current_rsp)
+    crate::drivers::timer::TimerDriver::tick(current_rsp)
 }
 
 #[unsafe(naked)]
@@ -288,7 +290,21 @@ pub extern "C" fn syscall_handler_wrapper(
 extern "x86-interrupt" fn keyboard_handler(
     _stack_frame: InterruptStackFrame,
 ) {
-    crate::keyboard::handle_interrupt();
+    if let Some(character) = crate::drivers::KEYBOARD_DRIVER.lock().handle_interrupt() {
+        let event = crate::tty::TTY.lock().tty_input(character);
+        match event {
+            crate::tty::TtyEvent::WakeReaders(pids) => {
+                for pid in pids {
+                    crate::process::PROCESS_TABLE.lock().wake_process_by_pid(pid);
+                }
+            }
+            crate::tty::TtyEvent::SignalForeground(signum) => {
+                let fg_pgid = crate::tty::TTY.lock().foreground_pgid();
+                let _ = crate::process::PROCESS_TABLE.lock().sys_killpg(0, fg_pgid, signum);
+            }
+            crate::tty::TtyEvent::None => {}
+        }
+    }
 
     unsafe {
         let pics = core::ptr::addr_of_mut!(PICS);

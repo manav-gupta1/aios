@@ -76,6 +76,11 @@ impl<'a> TextWriter<'a> {
     }
 
     pub fn write_char(&mut self, character: char) {
+        unsafe {
+            let mut port = x86_64::instructions::port::Port::new(0x3F8);
+            port.write(character as u8);
+        }
+        
         match character {
             '\n' => {
                 self.new_line();

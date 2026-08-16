@@ -97,6 +97,15 @@ impl Scheduler {
         }
     }
 
+    pub fn set_task_stopped(&mut self, task_id: usize, stopped: bool) {
+        for task in &mut self.tasks {
+            if task.id.0 == task_id {
+                task.is_stopped = stopped;
+                break;
+            }
+        }
+    }
+
     pub fn reset_task_user_context(
         &mut self,
         task_id: usize,
@@ -123,9 +132,11 @@ impl Scheduler {
         self.ticks_in_current_slice += 1;
 
         let current_state = self.tasks[self.current_index].state;
+        let is_stopped = self.tasks[self.current_index].is_stopped;
         let time_slice_expired = self.ticks_in_current_slice >= self.slice_length;
         let must_switch = current_state == TaskState::Finished
             || current_state == TaskState::Blocked
+            || is_stopped
             || time_slice_expired;
 
         if !must_switch {
@@ -144,14 +155,14 @@ impl Scheduler {
 
         for _ in 0..self.tasks.len() {
             next_index = (next_index + 1) % self.tasks.len();
-            if self.tasks[next_index].state == TaskState::Ready {
+            if self.tasks[next_index].state == TaskState::Ready && !self.tasks[next_index].is_stopped {
                 found_next = true;
                 break;
             }
         }
 
         if !found_next {
-            if self.tasks[self.current_index].state == TaskState::Ready {
+            if self.tasks[self.current_index].state == TaskState::Ready && !self.tasks[self.current_index].is_stopped {
                 self.tasks[self.current_index].state = TaskState::Running;
                 return self.tasks[self.current_index].rsp;
             }

@@ -626,6 +626,8 @@ impl FileSystem {
         let _ = self.write_file("/bin/pipe-test", crate::elf::ELF_PIPE_TEST_BIN);
         let _ = self.write_file("/bin/fork-test", crate::elf::ELF_FORK_TEST_BIN);
         let _ = self.write_file("/bin/cow-test", crate::elf::ELF_COW_TEST_BIN);
+        let _ = self.write_file("/bin/shared-mmap-test", crate::elf::ELF_SHARED_MMAP_TEST_BIN);
+        let _ = self.write_file("/bin/signal-test", crate::elf::ELF_SIGNAL_TEST_BIN);
     }
 
     pub fn remove_file(&mut self, path: &str) -> Result<(), FsError> {

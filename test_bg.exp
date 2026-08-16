@@ -1,0 +1,10 @@
+#!/usr/bin/expect -f
+set timeout 10
+set img [exec sh -c "ls -t ./target/release/build/nova-boot/*/out/nova-os-bios.img | head -n 1"]
+spawn qemu-system-x86_64 -drive format=raw,file=$img -display none -serial stdio
+expect "NOVA> "
+send "run /bin/hello &\r"
+expect {
+    "NOVA>" { puts "SUCCESS\n" ; exit 0 }
+    timeout { puts "TIMEOUT\n" ; exit 1 }
+}

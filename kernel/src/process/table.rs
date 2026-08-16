@@ -107,7 +107,8 @@ impl ProcessTable {
             }
 
             // Check if parent is Blocked waiting for this child
-            if let Some(parent) = self.processes.iter().find(|p| p.pid == ppid) {
+            if let Some(parent) = self.processes.iter_mut().find(|p| p.pid == ppid) {
+                parent.pending_signals |= 1 << crate::process::signal::SIGCHLD;
                 if parent.state == ProcessState::Blocked {
                     match parent.waiting_target_pid {
                         Some(None) => {
@@ -262,6 +263,22 @@ impl ProcessTable {
         Ok((rfd, wfd))
     }
 
+    pub fn open_file(&mut self, caller_pid: usize, path: &str) -> Result<usize, &'static str> {
+        let fs = crate::fs::FILESYSTEM.lock();
+        if fs.read_file_bytes(path).is_err() {
+            return Err("File not found");
+        }
+        
+        let proc = self
+            .processes
+            .iter_mut()
+            .find(|p| p.pid == caller_pid)
+            .ok_or("Process not found")?;
+
+        let fd = proc.alloc_fd(FileDescriptor::File(String::from(path), 0));
+        Ok(fd)
+    }
+
     pub fn read_fd(
         &mut self,
         caller_pid: usize,
@@ -269,7 +286,7 @@ impl ProcessTable {
         buf: &mut [u8],
     ) -> Result<usize, PipeReadResult> {
         let proc_opt = self.processes.iter().find(|p| p.pid == caller_pid);
-        let fd_desc = match proc_opt {
+        let mut fd_desc = match proc_opt {
             Some(p) => p.get_fd(fd).ok_or(PipeReadResult::BadFd)?,
             None => return Err(PipeReadResult::BadFd),
         };
@@ -298,8 +315,40 @@ impl ProcessTable {
                 }
             }
             FileDescriptor::Stdin => {
-                // Not supported for raw pipe read
-                Err(PipeReadResult::NotReadable)
+                let proc_pgid = self.processes.iter().find(|p| p.pid == caller_pid).map(|p| p.pgid).unwrap_or(0);
+                if proc_pgid != crate::tty::TTY.lock().foreground_pgid() {
+                    return Err(PipeReadResult::NotReadable);
+                }
+
+                match crate::tty::TTY.lock().read_user_buffer(caller_pid, buf) {
+                    Ok(n) => Ok(n),
+                    Err(()) => {
+                        if let Some(proc) = self.processes.iter_mut().find(|p| p.pid == caller_pid) {
+                            proc.state = ProcessState::Blocked;
+                            crate::task::set_task_state(proc.main_task_id, TaskState::Blocked);
+                        }
+                        Err(PipeReadResult::WouldBlock)
+                    }
+                }
+            }
+            FileDescriptor::File(ref path, ref mut offset) => {
+                let fs = crate::fs::FILESYSTEM.lock();
+                match fs.read_file_bytes(path) {
+                    Ok(file_bytes) => {
+                        let available = file_bytes.len().saturating_sub(*offset);
+                        let to_read = core::cmp::min(available, buf.len());
+                        if to_read > 0 {
+                            buf[..to_read].copy_from_slice(&file_bytes[*offset..*offset + to_read]);
+                            *offset += to_read;
+                            // Update the actual FD offset
+                            if let Some(proc) = self.processes.iter_mut().find(|p| p.pid == caller_pid) {
+                                proc.fd_table[fd] = Some(fd_desc.clone());
+                            }
+                        }
+                        Ok(to_read)
+                    }
+                    Err(_) => Err(PipeReadResult::NotReadable),
+                }
             }
             _ => Err(PipeReadResult::NotReadable),
         }
@@ -345,11 +394,10 @@ impl ProcessTable {
                 }
             }
             FileDescriptor::Stdout | FileDescriptor::Stderr => {
-                if let Ok(s) = core::str::from_utf8(buf) {
-                    crate::syscall::USER_OUTPUT_RECEIVED.store(true, core::sync::atomic::Ordering::Release);
-                    crate::console::write_str(s);
+                match crate::tty::TTY.lock().write_user_buffer(caller_pid, buf) {
+                    Ok(n) => Ok(n),
+                    Err(()) => Err(PipeWriteResult::NotWritable),
                 }
-                Ok(buf.len())
             }
             _ => Err(PipeWriteResult::NotWritable),
         }
@@ -426,6 +474,141 @@ impl ProcessTable {
 
         crate::memory::resolve_cow_page(page)?;
         proc.address_space.unmark_cow(page);
+        Ok(())
+    }
+    pub fn get_process_mmap_regions(&self, pid: usize) -> Option<Vec<crate::process::MmapRegion>> {
+        self.processes
+            .iter()
+            .find(|p| p.pid == pid)
+            .map(|p| p.address_space.mmap_regions.clone())
+    }
+
+    pub fn sys_kill(&mut self, _caller_pid: usize, target_pid: usize, signum: usize) -> Result<(), &'static str> {
+        if target_pid == 0 || signum == 0 || signum >= 64 {
+            return Err("Invalid argument");
+        }
+        
+        let target_idx = self.processes.iter().position(|p| p.pid == target_pid).ok_or("Process not found")?;
+        let action = self.processes[target_idx].sig_actions[signum];
+        let ppid = self.processes[target_idx].ppid;
+        let main_task_id = self.processes[target_idx].main_task_id;
+        let old_state = self.processes[target_idx].state;
+        
+        self.processes[target_idx].pending_signals |= 1 << signum;
+        
+        if signum != crate::process::signal::SIGKILL && action == crate::process::signal::SIG_IGN {
+            return Ok(()); // Ignored
+        }
+        
+        if action == crate::process::signal::SIG_DFL {
+            match signum {
+                crate::process::signal::SIGSTOP => {
+                    self.processes[target_idx].is_stopped = true;
+                    if old_state == ProcessState::Ready || old_state == ProcessState::Running {
+                        self.processes[target_idx].state = ProcessState::Stopped;
+                    }
+                    crate::task::scheduler::SCHEDULER.lock().set_task_stopped(main_task_id, true);
+                    
+                    if let Some(parent) = self.processes.iter_mut().find(|p| p.pid == ppid) {
+                        parent.pending_signals |= 1 << crate::process::signal::SIGCHLD;
+                    }
+                    return Ok(());
+                },
+                crate::process::signal::SIGCONT => {
+                    self.processes[target_idx].is_stopped = false;
+                    if old_state == ProcessState::Stopped {
+                        self.processes[target_idx].state = ProcessState::Ready;
+                    }
+                    crate::task::scheduler::SCHEDULER.lock().set_task_stopped(main_task_id, false);
+                    return Ok(());
+                },
+                crate::process::signal::SIGCHLD => {
+                    return Ok(());
+                },
+                _ => {} // SIGKILL, SIGTERM, fall through to exit
+            }
+        } else {
+            return Err("Not supported");
+        }
+        
+        self.exit_process(target_pid, 128 + signum as i32);
+        Ok(())
+    }
+
+    pub fn sys_sigaction(&mut self, caller_pid: usize, signum: usize, act_ptr: usize, oldact_ptr: usize) -> Result<(), &'static str> {
+        if signum == 0 || signum >= 64 || signum == crate::process::signal::SIGKILL {
+            return Err("Invalid argument");
+        }
+        
+        let proc = self.processes.iter_mut().find(|p| p.pid == caller_pid).ok_or("Process not found")?;
+        
+        if oldact_ptr != 0 {
+            if !crate::memory::validate_user_buffer(oldact_ptr as *const u8, 32) {
+                return Err("Bad address");
+            }
+            unsafe {
+                let oldact = oldact_ptr as *mut usize;
+                *oldact = proc.sig_actions[signum];
+                *oldact.add(1) = 0;
+                *oldact.add(2) = 0;
+                *oldact.add(3) = 0;
+            }
+        }
+        if act_ptr != 0 {
+            if !crate::memory::validate_user_buffer(act_ptr as *const u8, 32) {
+                return Err("Bad address");
+            }
+            unsafe {
+                let act = act_ptr as *const usize;
+                let handler = *act;
+                if handler != crate::process::signal::SIG_DFL && handler != crate::process::signal::SIG_IGN {
+                    return Err("Custom handlers not supported");
+                }
+                proc.sig_actions[signum] = handler;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn sys_setpgid(&mut self, _caller_pid: usize, target_pid: usize, pgid: usize) -> Result<(), &'static str> {
+        let p = self.processes.iter_mut().find(|p| p.pid == target_pid).ok_or("Process not found")?;
+        // Minimal implementation: allow shell to set PGID freely
+        p.pgid = if pgid == 0 { target_pid } else { pgid };
+        Ok(())
+    }
+
+    pub fn sys_killpg(&mut self, _caller_pid: usize, target_pgid: usize, signum: usize) -> Result<(), &'static str> {
+        if target_pgid == 0 || signum == 0 || signum >= 64 {
+            return Err("Invalid argument");
+        }
+        
+        // Find all pids in this pgid
+        let mut pids_in_pg = Vec::new();
+        for p in &self.processes {
+            if p.pgid == target_pgid {
+                pids_in_pg.push(p.pid);
+            }
+        }
+        
+        if pids_in_pg.is_empty() {
+            return Err("Process group not found");
+        }
+        
+        for pid in pids_in_pg {
+            // We ignore errors for individual processes in killpg
+            let _ = self.sys_kill(_caller_pid, pid, signum);
+        }
+        
+        Ok(())
+    }
+
+    pub fn sys_tcsetpgrp(&mut self, _caller_pid: usize, pgid: usize) -> Result<(), &'static str> {
+        // Find if this pgid exists
+        let exists = self.processes.iter().any(|p| p.pgid == pgid);
+        if !exists && pgid != 1 {
+            return Err("Process group not found");
+        }
+        crate::tty::TTY.lock().set_foreground_pgid(pgid);
         Ok(())
     }
 }

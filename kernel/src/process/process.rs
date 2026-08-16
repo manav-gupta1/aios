@@ -11,6 +11,7 @@ pub enum ProcessState {
     Running,
     Blocked,
     Zombie,
+    Stopped,
 }
 
 impl ProcessState {
@@ -21,6 +22,7 @@ impl ProcessState {
             ProcessState::Running => "RUNNING",
             ProcessState::Blocked => "BLOCKED",
             ProcessState::Zombie => "ZOMBIE",
+            ProcessState::Stopped => "STOPPED",
         }
     }
 }
@@ -32,11 +34,22 @@ pub enum FileDescriptor {
     Stderr,
     PipeRead(Arc<Mutex<Pipe>>),
     PipeWrite(Arc<Mutex<Pipe>>),
+    File(String, usize), // path, current offset
+}
+
+#[derive(Clone)]
+pub struct MmapRegion {
+    pub start: usize,
+    pub length: usize,
+    pub prot: usize,
+    pub flags: usize,
+    pub file_path: Option<String>,
 }
 
 pub struct ProcessAddressSpace {
     pub pages: Vec<Page<Size4KiB>>,
     pub cow_pages: Vec<Page<Size4KiB>>,
+    pub mmap_regions: Vec<MmapRegion>,
 }
 
 impl ProcessAddressSpace {
@@ -44,12 +57,19 @@ impl ProcessAddressSpace {
         ProcessAddressSpace {
             pages: Vec::new(),
             cow_pages: Vec::new(),
+            mmap_regions: Vec::new(),
         }
     }
 
     pub fn add_page(&mut self, page: Page<Size4KiB>) {
         if !self.pages.contains(&page) {
             self.pages.push(page);
+        }
+    }
+
+    pub fn remove_page(&mut self, page: Page<Size4KiB>) {
+        if let Some(pos) = self.pages.iter().position(|p| *p == page) {
+            self.pages.remove(pos);
         }
     }
 
@@ -71,6 +91,16 @@ impl ProcessAddressSpace {
 
     pub fn unmap_all(&mut self) {
         self.cow_pages.clear();
+        for region in &self.mmap_regions {
+            if (region.flags & 0x01) != 0 { // MAP_SHARED
+                if let Some(ref path) = region.file_path {
+                    let slice = unsafe { core::slice::from_raw_parts(region.start as *const u8, region.length) };
+                    let mut fs = crate::fs::FILESYSTEM.lock();
+                    let _ = fs.write_file(path, slice);
+                }
+            }
+        }
+        self.mmap_regions.clear();
         for page in self.pages.drain(..) {
             let _ = crate::memory::unmap_user_page(page);
         }
@@ -80,6 +110,8 @@ impl ProcessAddressSpace {
 pub struct Process {
     pub pid: usize,
     pub ppid: usize,
+    pub pgid: usize,
+    pub sid: usize,
     pub state: ProcessState,
     pub name: String,
     pub main_task_id: usize,
@@ -87,6 +119,10 @@ pub struct Process {
     pub address_space: ProcessAddressSpace,
     pub waiting_target_pid: Option<Option<usize>>,
     pub fd_table: Vec<Option<FileDescriptor>>,
+    pub pending_signals: u64,
+    pub blocked_signals: u64,
+    pub sig_actions: [usize; 64],
+    pub is_stopped: bool,
 }
 
 impl Process {
@@ -102,6 +138,8 @@ impl Process {
         Process {
             pid: 1,
             ppid: 0,
+            pgid: 1,
+            sid: 1,
             state: ProcessState::Running,
             name: String::from("init"),
             main_task_id: 1,
@@ -109,6 +147,10 @@ impl Process {
             address_space: ProcessAddressSpace::new(),
             waiting_target_pid: None,
             fd_table: Self::default_fd_table(),
+            pending_signals: 0,
+            blocked_signals: 0,
+            sig_actions: [0; 64],
+            is_stopped: false,
         }
     }
 
@@ -122,6 +164,8 @@ impl Process {
         Process {
             pid,
             ppid,
+            pgid: ppid, // By default, inherit parent's pgid
+            sid: ppid,  // and sid (simplification)
             state: ProcessState::Ready,
             name: String::from(name),
             main_task_id,
@@ -129,6 +173,10 @@ impl Process {
             address_space,
             waiting_target_pid: None,
             fd_table: Self::default_fd_table(),
+            pending_signals: 0,
+            blocked_signals: 0,
+            sig_actions: [0; 64],
+            is_stopped: false,
         }
     }
 

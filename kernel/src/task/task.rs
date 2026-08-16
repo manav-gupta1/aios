@@ -63,6 +63,7 @@ pub struct Task {
     pub ticks: usize,
     #[allow(dead_code)]
     pub stack: Option<Box<[u8; TASK_STACK_SIZE]>>,
+    pub is_stopped: bool,
 }
 
 impl Task {
@@ -76,6 +77,7 @@ impl Task {
             rsp: 0,
             ticks: 0,
             stack: None,
+            is_stopped: false,
         }
     }
 
@@ -123,6 +125,7 @@ impl Task {
             rsp: frame_ptr as usize,
             ticks: 0,
             stack: Some(stack),
+            is_stopped: false,
         }
     }
 
@@ -170,6 +173,7 @@ impl Task {
             rsp: frame_ptr as usize,
             ticks: 0,
             stack: Some(stack),
+            is_stopped: false,
         }
     }
 

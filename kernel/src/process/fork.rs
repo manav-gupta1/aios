@@ -33,20 +33,48 @@ pub fn do_fork(
             None => continue,
         };
 
-        // For all user pages, ensure both parent and child map it as read-only COW
-        let ro_flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
+        let page_addr = page.start_address().as_u64() as usize;
+        let mut is_shared = false;
+        let mut shared_prot = 0;
+        
+        for r in &parent.address_space.mmap_regions {
+            if r.start <= page_addr && page_addr < r.start + r.length {
+                if (r.flags & crate::memory::mmap::MAP_SHARED) != 0 {
+                    is_shared = true;
+                    shared_prot = r.prot;
+                }
+                break;
+            }
+        }
 
-        // Clear WRITABLE flag in parent's page table mapping
-        let _ = crate::memory::update_page_flags(page, ro_flags);
-        parent.address_space.mark_cow(page);
+        if is_shared {
+            let mut shared_flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
+            if (shared_prot & crate::memory::mmap::PROT_WRITE) != 0 {
+                shared_flags |= PageTableFlags::WRITABLE;
+            }
+            if (shared_prot & crate::memory::mmap::PROT_EXEC) == 0 {
+                shared_flags |= PageTableFlags::NO_EXECUTE;
+            }
+            
+            crate::memory::inc_frame_ref(frame);
+            let _ = crate::memory::map_page_to_frame(page, frame, shared_flags);
+            child_address_space.add_page(page);
+        } else {
+            // For all user pages, ensure both parent and child map it as read-only COW
+            let ro_flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
 
-        // Increment reference count of shared physical frame
-        crate::memory::inc_frame_ref(frame);
+            // Clear WRITABLE flag in parent's page table mapping
+            let _ = crate::memory::update_page_flags(page, ro_flags);
+            parent.address_space.mark_cow(page);
 
-        // Map same frame to child with read-only flags
-        let _ = crate::memory::map_page_to_frame(page, frame, ro_flags);
-        child_address_space.add_page(page);
-        child_address_space.mark_cow(page);
+            // Increment reference count of shared physical frame
+            crate::memory::inc_frame_ref(frame);
+
+            // Map same frame to child with read-only flags
+            let _ = crate::memory::map_page_to_frame(page, frame, ro_flags);
+            child_address_space.add_page(page);
+            child_address_space.mark_cow(page);
+        }
     }
 
     // 4. Duplicate file descriptor table
@@ -65,6 +93,9 @@ pub fn do_fork(
                 FileDescriptor::Stdin => child_fd_table.push(Some(FileDescriptor::Stdin)),
                 FileDescriptor::Stdout => child_fd_table.push(Some(FileDescriptor::Stdout)),
                 FileDescriptor::Stderr => child_fd_table.push(Some(FileDescriptor::Stderr)),
+                FileDescriptor::File(path, offset) => {
+                    child_fd_table.push(Some(FileDescriptor::File(path.clone(), *offset)));
+                }
             }
         } else {
             child_fd_table.push(None);
@@ -112,6 +143,7 @@ pub fn do_fork(
         rsp: child_frame_ptr as usize,
         ticks: 0,
         stack: Some(child_stack),
+        is_stopped: false,
     };
 
     let child_task_id = child_task.id.0;
@@ -121,6 +153,8 @@ pub fn do_fork(
     let child_process = Process {
         pid: child_pid,
         ppid: parent_pid,
+        pgid: parent.pgid,
+        sid: parent.sid,
         state: ProcessState::Ready,
         name: String::from(parent.name.as_str()),
         main_task_id: child_task_id,
@@ -128,6 +162,10 @@ pub fn do_fork(
         address_space: child_address_space,
         waiting_target_pid: None,
         fd_table: child_fd_table,
+        pending_signals: 0,
+        blocked_signals: parent.blocked_signals,
+        sig_actions: parent.sig_actions,
+        is_stopped: false,
     };
 
     table.processes.push(child_process);

@@ -1,0 +1,6 @@
+[build]
+target = "x86_64-unknown-none"
+rustflags = [
+    "-C", "link-arg=-Tuser/hello/linker.ld",
+    "-C", "relocation-model=static",
+]

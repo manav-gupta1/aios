@@ -2,18 +2,29 @@ use crate::fs::{FsError, NodeKind, FILESYSTEM, MAX_PATH_LEN};
 use crate::graphics::text::TextWriter;
 use core::sync::atomic::Ordering;
 
-pub const MAX_COMMAND_LENGTH: usize = 128;
+use alloc::string::String;
+use alloc::vec::Vec;
+use crate::process::ProcessState;
+
+
+#[derive(Clone)]
+pub struct Job {
+    pub id: usize,
+    pub pgid: usize,
+    pub cmd: String,
+    pub is_background: bool,
+}
 
 pub struct Shell {
-    buffer: [u8; MAX_COMMAND_LENGTH],
-    len: usize,
+    jobs: Vec<Job>,
+    next_job_id: usize,
 }
 
 impl Shell {
     pub const fn new() -> Self {
         Self {
-            buffer: [0; MAX_COMMAND_LENGTH],
-            len: 0,
+            jobs: Vec::new(),
+            next_job_id: 1,
         }
     }
 
@@ -64,46 +75,8 @@ impl Shell {
         text.set_color(235, 235, 245);
     }
 
-    pub fn handle_char(&mut self, character: char, text: &mut TextWriter) {
-        match character {
-            '\n' | '\r' => {
-                text.write_char('\n');
-                self.execute(text);
-                self.len = 0;
-            }
-
-            '\u{8}' => {
-                if self.len > 0 {
-                    self.len -= 1;
-                    text.write_char('\u{8}');
-                }
-            }
-
-            c if c.is_ascii() && !c.is_ascii_control() => {
-                if self.len < MAX_COMMAND_LENGTH {
-                    self.buffer[self.len] = c as u8;
-                    self.len += 1;
-                    text.write_char(c);
-                }
-            }
-
-            _ => {}
-        }
-    }
-
-    fn execute(&mut self, text: &mut TextWriter) {
-        let mut cmd_buf = [0u8; MAX_COMMAND_LENGTH];
-        cmd_buf[..self.len].copy_from_slice(&self.buffer[..self.len]);
-
-        let raw_input = match core::str::from_utf8(&cmd_buf[..self.len]) {
-            Ok(s) => s,
-            Err(_) => {
-                self.print_prompt(text);
-                return;
-            }
-        };
-
-        let (command, args) = parse_command(raw_input);
+    pub fn execute_line(&mut self, line: &str, text: &mut TextWriter) {
+        let (command, args) = parse_command(line);
 
         if command.is_empty() {
             self.print_prompt(text);
@@ -149,6 +122,16 @@ impl Shell {
             self.cmd_ps(text);
         } else if command.eq_ignore_ascii_case("wait") {
             self.cmd_wait(args, text);
+        } else if command.eq_ignore_ascii_case("jobs") {
+            self.cmd_jobs(text);
+        } else if command.eq_ignore_ascii_case("fg") {
+            self.cmd_fg(args, text);
+        } else if command.eq_ignore_ascii_case("bg") {
+            self.cmd_bg(args, text);
+        } else if command.eq_ignore_ascii_case("vmmap") {
+            self.cmd_vmmap(args, text);
+        } else if command.eq_ignore_ascii_case("lspci") {
+            self.cmd_lspci(text);
         } else if command.eq_ignore_ascii_case("schedtest") {
             self.cmd_schedtest(text);
         } else {
@@ -180,7 +163,12 @@ impl Shell {
         text.write_str("  fsinfo     - Display filesystem information\n");
         text.write_str("  meminfo    - Display memory subsystem information\n");
         text.write_str("  ps         - Display active processes table\n");
+        text.write_str("  lspci      - List PCI devices\n");
+        text.write_str("  vmmap      - Display memory mappings for a process\n");
         text.write_str("  wait [pid] - Wait for and collect child process\n");
+        text.write_str("  jobs       - List active background and stopped jobs\n");
+        text.write_str("  fg <id>    - Bring job to foreground\n");
+        text.write_str("  bg <id>    - Resume job in background\n");
         text.write_str("  schedtest  - Run preemptive scheduler verification test\n\n");
     }
 
@@ -197,7 +185,7 @@ impl Shell {
         text.write_str("kernel\n\n");
     }
 
-    fn cmd_run(&self, args: &str, text: &mut TextWriter) {
+    fn cmd_run(&mut self, args: &str, text: &mut TextWriter) {
         if args.is_empty() {
             text.set_color(240, 80, 80);
             text.write_str("Usage: run <path> (e.g. run /bin/hello)\n\n");
@@ -219,20 +207,29 @@ impl Shell {
             return;
         }
 
+        // Parse background indicator
+        let mut is_background = false;
+        let clean_args = if args.trim_end().ends_with('&') {
+            is_background = true;
+            args.trim_end().trim_end_matches('&').trim()
+        } else {
+            args.trim()
+        };
+
         // Resolve path: if relative like "hello", check "/bin/hello"
-        let resolved_path: &str = if !args.starts_with('/') {
+        let resolved_path: &str = if !clean_args.starts_with('/') {
             let mut bin_path = alloc::string::String::from("/bin/");
-            bin_path.push_str(args);
+            bin_path.push_str(clean_args);
             let fs = FILESYSTEM.lock();
             if fs.resolve_path(&bin_path).is_ok() {
                 drop(fs);
                 alloc::boxed::Box::leak(bin_path.into_boxed_str())
             } else {
                 drop(fs);
-                args
+                clean_args
             }
         } else {
-            args
+            clean_args
         };
 
         // Read executable bytes from filesystem
@@ -262,17 +259,59 @@ impl Shell {
 
         match crate::elf::load_and_spawn_elf(1, leak_name, &elf_buf[..file_len]) {
             Ok(child_pid) => {
-                // Wait for user mode execution output until process terminates
-                for _ in 0..1000 {
+                // Assign new process group
+                let _ = crate::process::sys_setpgid(1, child_pid, child_pid);
+
+                if is_background {
+                    let job_id = self.next_job_id;
+                    self.next_job_id += 1;
+                    self.jobs.push(Job {
+                        id: job_id,
+                        pgid: child_pid,
+                        cmd: String::from(clean_args),
+                        is_background: true,
+                    });
+                    
+                    text.set_color(80, 220, 120);
+                    text.write_str("[");
+                    write_u32(job_id as u32, text);
+                    text.write_str("] ");
+                    write_u32(child_pid as u32, text);
+                    text.write_str("\n\n");
+                    return;
+                }
+
+                // Foreground execution
+                let _ = crate::process::sys_tcsetpgrp(1, child_pid);
+                
+                // Wait for user mode execution output until process terminates or stops
+                for _ in 0..2000 {
                     while let Some(c) = crate::console::read_out_char() {
                         text.write_char(c);
                     }
 
-                    let is_finished = crate::process::get_process_snapshots()
+                    let state = crate::process::get_process_snapshots()
                         .iter()
-                        .any(|p| p.pid == child_pid && p.state == crate::process::ProcessState::Zombie);
+                        .find(|p| p.pid == child_pid)
+                        .map(|p| p.state);
+                        
+                    let is_finished = state == Some(crate::process::ProcessState::Zombie);
+                    let is_stopped = state == Some(crate::process::ProcessState::Stopped);
 
-                    if is_finished {
+                    if is_finished || is_stopped {
+                        if is_stopped {
+                            let job_id = self.next_job_id;
+                            self.next_job_id += 1;
+                            self.jobs.push(Job {
+                                id: job_id,
+                                pgid: child_pid,
+                                cmd: String::from(clean_args),
+                                is_background: false,
+                            });
+                            text.write_str("\n[");
+                            write_u32(job_id as u32, text);
+                            text.write_str("] Stopped\n");
+                        }
                         break;
                     }
 
@@ -280,6 +319,8 @@ impl Shell {
                         core::hint::spin_loop();
                     }
                 }
+                
+                let _ = crate::process::sys_tcsetpgrp(1, 1); // Return terminal to shell
 
                 // Flush any remaining characters
                 while let Some(c) = crate::console::read_out_char() {
@@ -330,6 +371,217 @@ impl Shell {
                 text.set_color(240, 80, 80);
                 text.write_str("Invalid PID.\n\n");
             }
+        }
+    }
+
+    fn cmd_jobs(&mut self, text: &mut TextWriter) {
+        let snaps = crate::process::get_process_snapshots();
+        let mut to_remove = Vec::new();
+        
+        for (i, job) in self.jobs.iter().enumerate() {
+            let proc = snaps.iter().find(|p| p.pid == job.pgid); // Process group leader
+            
+            text.set_color(80, 160, 255);
+            text.write_str("[");
+            write_u32(job.id as u32, text);
+            text.write_str("] ");
+            
+            match proc {
+                Some(p) if p.state == ProcessState::Stopped => {
+                    text.set_color(160, 160, 170);
+                    text.write_str("Stopped   ");
+                },
+                Some(p) if p.state == ProcessState::Zombie => {
+                    text.set_color(80, 220, 120);
+                    text.write_str("Completed ");
+                    to_remove.push(i);
+                },
+                Some(_) => {
+                    text.set_color(80, 220, 120);
+                    text.write_str("Running   ");
+                },
+                None => {
+                    text.set_color(80, 220, 120);
+                    text.write_str("Completed ");
+                    to_remove.push(i);
+                }
+            }
+            
+            text.set_color(235, 235, 245);
+            text.write_str(&job.cmd);
+            text.write_str("\n");
+        }
+        
+        for idx in to_remove.iter().rev() {
+            self.jobs.remove(*idx);
+        }
+        text.write_str("\n");
+    }
+
+    fn cmd_fg(&mut self, args: &str, text: &mut TextWriter) {
+        let job_id = match args.trim().parse::<usize>() {
+            Ok(n) => n,
+            Err(_) => {
+                text.set_color(240, 80, 80);
+                text.write_str("Usage: fg <job_id>\n\n");
+                return;
+            }
+        };
+        
+        let job_idx = match self.jobs.iter().position(|j| j.id == job_id) {
+            Some(idx) => idx,
+            None => {
+                text.set_color(240, 80, 80);
+                text.write_str("fg: job not found\n\n");
+                return;
+            }
+        };
+        
+        let mut job = self.jobs.remove(job_idx);
+        job.is_background = false;
+        
+        text.set_color(235, 235, 245);
+        text.write_str(&job.cmd);
+        text.write_str("\n");
+        
+        let _ = crate::process::sys_tcsetpgrp(1, job.pgid);
+        let _ = crate::process::sys_killpg(1, job.pgid, crate::process::signal::SIGCONT);
+        
+        // Wait
+        for _ in 0..2000 {
+            while let Some(c) = crate::console::read_out_char() {
+                text.write_char(c);
+            }
+
+            let state = crate::process::get_process_snapshots()
+                .iter()
+                .find(|p| p.pid == job.pgid)
+                .map(|p| p.state);
+                
+            let is_finished = state == Some(crate::process::ProcessState::Zombie) || state.is_none();
+            let is_stopped = state == Some(crate::process::ProcessState::Stopped);
+
+            if is_finished || is_stopped {
+                if is_stopped {
+                    self.jobs.push(job.clone());
+                    text.write_str("\n[");
+                    write_u32(job.id as u32, text);
+                    text.write_str("] Stopped\n");
+                }
+                break;
+            }
+
+            for _ in 0..50_000 {
+                core::hint::spin_loop();
+            }
+        }
+        
+        let _ = crate::process::sys_tcsetpgrp(1, 1);
+        while let Some(c) = crate::console::read_out_char() {
+            text.write_char(c);
+        }
+        text.write_str("\n");
+    }
+
+    fn cmd_bg(&mut self, args: &str, text: &mut TextWriter) {
+        let job_id = match args.trim().parse::<usize>() {
+            Ok(n) => n,
+            Err(_) => {
+                text.set_color(240, 80, 80);
+                text.write_str("Usage: bg <job_id>\n\n");
+                return;
+            }
+        };
+        
+        let job = match self.jobs.iter_mut().find(|j| j.id == job_id) {
+            Some(j) => j,
+            None => {
+                text.set_color(240, 80, 80);
+                text.write_str("bg: job not found\n\n");
+                return;
+            }
+        };
+        
+        job.is_background = true;
+        let _ = crate::process::sys_killpg(1, job.pgid, crate::process::signal::SIGCONT);
+        
+        text.set_color(80, 160, 255);
+        text.write_str("[");
+        write_u32(job.id as u32, text);
+        text.write_str("] ");
+        text.set_color(235, 235, 245);
+        text.write_str(&job.cmd);
+        text.write_str(" &\n\n");
+    }
+
+    fn cmd_vmmap(&self, args: &str, text: &mut TextWriter) {
+        let target_pid = if args.is_empty() {
+            crate::process::current_pid()
+        } else if let Ok(pid) = args.trim().parse::<usize>() {
+            pid
+        } else {
+            text.set_color(240, 80, 80);
+            text.write_str("Usage: vmmap [pid]\n\n");
+            return;
+        };
+
+        if let Some(regions) = x86_64::instructions::interrupts::without_interrupts(|| crate::process::PROCESS_TABLE.lock().get_process_mmap_regions(target_pid)) {
+            text.set_color(80, 160, 255);
+            text.write_str("Memory Mappings for PID ");
+            write_u32(target_pid as u32, text);
+            text.write_str(":\n");
+            
+            if regions.is_empty() {
+                text.set_color(235, 235, 245);
+                text.write_str("  No mappings found.\n\n");
+                return;
+            }
+
+            text.set_color(235, 235, 245);
+            text.write_str("  START ADDR         LENGTH (BYTES)  PROT  FLAGS\n");
+            for r in regions {
+                text.write_str("  0x");
+                // simplistic hex print
+                let mut buf = [0u8; 16];
+                let val = r.start;
+                for i in 0..16 {
+                    let nibble = (val >> (60 - i * 4)) & 0xf;
+                    buf[i] = if nibble < 10 { b'0' + nibble as u8 } else { b'a' + (nibble - 10) as u8 };
+                }
+                for i in 0..16 {
+                    text.write_char(buf[i] as char);
+                }
+                text.write_str(" ");
+                write_u32(r.length as u32, text);
+                
+                text.write_str("            ");
+                write_u32(r.prot as u32, text);
+                text.write_str("     ");
+                write_u32(r.flags as u32, text);
+                text.write_str("\n");
+            }
+            text.write_str("\n");
+        } else {
+            text.set_color(240, 80, 80);
+            text.write_str("Process not found.\n\n");
+        }
+    }
+
+
+    fn cmd_lspci(&self, text: &mut TextWriter) {
+        let devices = crate::drivers::pci::enumerate_devices();
+        
+        text.set_color(80, 160, 255);
+        text.write_str("PCI Devices:\n");
+        text.set_color(235, 235, 245);
+        
+        for dev in devices {
+            let class_name = crate::drivers::pci::pci_class_name(dev.class_code, dev.subclass);
+            let line = alloc::format!(
+                "{:02X}:{:02X}.{}  {}\n",
+                dev.bus, dev.device, dev.function, class_name
+            );
+            text.write_str(&line);
         }
     }
 
@@ -618,6 +870,10 @@ impl Shell {
                 crate::process::ProcessState::Blocked => {
                     text.set_color(240, 180, 80);
                     text.write_str("BLOCKED    ");
+                }
+                crate::process::ProcessState::Stopped => {
+                    text.set_color(160, 160, 170);
+                    text.write_str("STOPPED    ");
                 }
                 crate::process::ProcessState::Zombie => {
                     text.set_color(160, 160, 170);

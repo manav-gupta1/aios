@@ -1,5 +1,6 @@
 pub mod frame_allocator;
 pub mod heap;
+pub mod mmap;
 
 use bootloader_api::info::MemoryRegions;
 use frame_allocator::BootInfoFrameAllocator;
@@ -353,25 +354,14 @@ pub fn unmap_user_page(page: Page<Size4KiB>) -> Result<(), &'static str> {
         None => return Err("Frame allocator not initialized"),
     };
 
-    let ref_count = frame_allocator.get_ref(frame);
-    if ref_count > 1 {
-        // Shared frame: decrement refcount, preserve active mapping for surviving process
-        frame_allocator.dec_ref(frame);
-        Ok(())
-    } else {
-        // Last owner: unmap from page table and free physical frame
-        drop(alloc_lock);
-        match mapper.unmap(page) {
-            Ok((_unmapped_frame, flush)) => {
-                flush.flush();
-                let mut alloc_lock = FRAME_ALLOCATOR.lock();
-                if let Some(ref mut alloc) = *alloc_lock {
-                    alloc.dec_ref(frame);
-                }
-                Ok(())
-            }
-            Err(_) => Err("Failed to unmap page"),
+    // Always unmap from current page table
+    match mapper.unmap(page) {
+        Ok((_unmapped_frame, flush)) => {
+            flush.flush();
+            frame_allocator.dec_ref(frame);
+            Ok(())
         }
+        Err(_) => Err("Failed to unmap page"),
     }
 }
 

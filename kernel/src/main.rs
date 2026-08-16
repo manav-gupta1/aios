@@ -11,12 +11,13 @@ mod gdt;
 mod graphics;
 mod interrupts;
 mod ipc;
-mod keyboard;
+pub mod drivers;
 mod memory;
 mod process;
 mod shell;
 mod syscall;
 mod task;
+pub mod tty;
 mod userspace;
 
 use bootloader_api::{
@@ -84,10 +85,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             had_work = true;
         }
 
-        // Move decoded keyboard characters from the interrupt-side
-        // queue into the shell.
-        while let Some(character) = console::read_char() {
-            shell.handle_char(character, &mut text);
+        while let Some(line) = x86_64::instructions::interrupts::without_interrupts(|| crate::tty::TTY.lock().try_read_line_for_kernel()) {
+            shell.execute_line(&line, &mut text);
             had_work = true;
         }
 

@@ -10,7 +10,14 @@ pub const SYS_READ: usize = 7;
 pub const SYS_PIPE: usize = 8;
 pub const SYS_CLOSE: usize = 9;
 pub const SYS_FORK: usize = 10;
-
+pub const SYS_MMAP: usize = 11;
+pub const SYS_MUNMAP: usize = 12;
+pub const SYS_OPEN: usize = 13;
+pub const SYS_KILL: usize = 14;
+pub const SYS_SIGACTION: usize = 15;
+pub const SYS_SETPGID: usize = 16;
+pub const SYS_KILLPG: usize = 17;
+pub const SYS_TCSETPGRP: usize = 18;
 pub static LAST_SYSCALL_NUM: AtomicUsize = AtomicUsize::new(0);
 pub static LAST_SYSCALL_PID: AtomicUsize = AtomicUsize::new(0);
 pub static LAST_SYSCALL_IS_RING3: AtomicBool = AtomicBool::new(false);
@@ -79,7 +86,9 @@ pub fn syscall_dispatch(
         }
 
         SYS_EXIT => {
-            crate::process::exit_current_process(arg1 as i32);
+            let status = arg1 as i32;
+            crate::process::PROCESS_TABLE.lock().exit_process(pid, status);
+            crate::task::scheduler::exit_current_task();
         }
 
         SYS_GETPID => pid as u64,
@@ -213,6 +222,93 @@ pub fn syscall_dispatch(
         SYS_FORK => {
             match crate::process::fork_current_process(pid, frame_ptr) {
                 Ok(child_pid) => child_pid as u64,
+                Err(_) => u64::MAX,
+            }
+        }
+
+        SYS_MMAP => {
+            let length = arg1;
+            let prot = arg2;
+            let flags = arg3;
+            let fd = unsafe { *frame_ptr.add(12) } as usize; // rcx (arg4)
+            let offset = unsafe { *frame_ptr.add(7) } as usize; // r8 (arg5)
+            
+            match crate::memory::mmap::do_mmap(0, length, prot, flags, fd, offset) {
+                Ok(addr) => addr as u64,
+                Err(_) => u64::MAX,
+            }
+        }
+
+        SYS_MUNMAP => {
+            let addr = arg1;
+            let length = arg2;
+            match crate::memory::mmap::do_munmap(addr, length) {
+                Ok(_) => 0,
+                Err(_) => u64::MAX,
+            }
+        }
+
+        SYS_OPEN => {
+            let ptr = arg1 as *const u8;
+            let len = arg2;
+
+            if !crate::memory::validate_user_buffer(ptr, len) {
+                return u64::MAX;
+            }
+
+            let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
+            let path_str = match core::str::from_utf8(slice) {
+                Ok(s) => s,
+                Err(_) => return u64::MAX,
+            };
+
+            match crate::process::open_file(pid, path_str) {
+                Ok(fd) => fd as u64,
+                Err(_) => u64::MAX,
+            }
+        }
+
+        SYS_KILL => {
+            let target_pid = arg1;
+            let signum = arg2;
+            match crate::process::sys_kill(pid, target_pid, signum) {
+                Ok(_) => 0,
+                Err(_) => u64::MAX,
+            }
+        }
+
+        SYS_SIGACTION => {
+            let signum = arg1;
+            let act_ptr = arg2;
+            let oldact_ptr = arg3;
+            match crate::process::sys_sigaction(pid, signum, act_ptr, oldact_ptr) {
+                Ok(_) => 0,
+                Err(_) => u64::MAX,
+            }
+        }
+
+        SYS_SETPGID => {
+            let target_pid = arg1;
+            let pgid = arg2;
+            match crate::process::sys_setpgid(pid, target_pid, pgid) {
+                Ok(_) => 0,
+                Err(_) => u64::MAX,
+            }
+        }
+
+        SYS_KILLPG => {
+            let pgid = arg1;
+            let signum = arg2;
+            match crate::process::sys_killpg(pid, pgid, signum) {
+                Ok(_) => 0,
+                Err(_) => u64::MAX,
+            }
+        }
+
+        SYS_TCSETPGRP => {
+            let pgid = arg1;
+            match crate::process::sys_tcsetpgrp(pid, pgid) {
+                Ok(_) => 0,
                 Err(_) => u64::MAX,
             }
         }

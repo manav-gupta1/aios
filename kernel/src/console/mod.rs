@@ -46,21 +46,29 @@ static OUT_BUFFER: Mutex<CharBuffer> = Mutex::new(CharBuffer::new());
 
 pub fn write_char(character: char) {
     x86_64::instructions::interrupts::without_interrupts(|| {
-        CHAR_BUFFER.lock().push(character);
+        OUT_BUFFER.lock().push(character);
+        
+        // Output to serial port (COM1 = 0x3F8) for debugging
+        unsafe {
+            let mut port = x86_64::instructions::port::Port::new(0x3F8);
+            port.write(character as u8);
+        }
     });
 }
 
-pub fn read_char() -> Option<char> {
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        CHAR_BUFFER.lock().pop()
-    })
-}
+
 
 pub fn write_str(s: &str) {
     x86_64::instructions::interrupts::without_interrupts(|| {
         let mut buf = OUT_BUFFER.lock();
         for c in s.chars() {
             buf.push(c);
+            
+            // Output to serial port (COM1 = 0x3F8) for debugging
+            unsafe {
+                let mut port = x86_64::instructions::port::Port::new(0x3F8);
+                port.write(c as u8);
+            }
         }
     });
 }

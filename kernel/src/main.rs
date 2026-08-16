@@ -3,6 +3,7 @@
 #![feature(abi_x86_interrupt)]
 
 mod console;
+mod fs;
 mod graphics;
 mod interrupts;
 mod keyboard;
@@ -17,7 +18,13 @@ use graphics::framebuffer::FrameBufferWriter;
 use graphics::text::TextWriter;
 use shell::Shell;
 
-entry_point!(kernel_main);
+pub static BOOTLOADER_CONFIG: bootloader_api::BootloaderConfig = {
+    let mut config = bootloader_api::BootloaderConfig::new_default();
+    config.kernel_stack_size = 100 * 1024;
+    config
+};
+
+entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let framebuffer = boot_info

@@ -7,13 +7,26 @@ fn main() {
             .expect("kernel artifact not found"),
     );
 
-    let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    println!("NOVA: kernel artifact = {}", kernel.display());
+
+    let out_dir = PathBuf::from(
+        env::var_os("OUT_DIR")
+            .expect("OUT_DIR not found"),
+    );
+
     let bios_path = out_dir.join("nova-os-bios.img");
 
     bootloader::DiskImageBuilder::new(kernel)
         .create_bios_image(&bios_path)
         .expect("failed to create NOVA BIOS image");
 
-    println!("cargo:rustc-env=NOVA_BIOS_IMAGE={}", bios_path.display());
-}
+    println!(
+        "NOVA: BIOS image created = {}",
+        bios_path.display()
+    );
 
+    println!(
+        "cargo:rustc-env=NOVA_BIOS_IMAGE={}",
+        bios_path.display()
+    );
+}

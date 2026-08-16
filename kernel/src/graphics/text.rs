@@ -7,6 +7,7 @@ pub struct TextWriter<'a> {
     framebuffer: FrameBufferWriter<'a>,
     x: usize,
     y: usize,
+    margin_x: usize,
     scale: usize,
     foreground: (u8, u8, u8),
     background: (u8, u8, u8),
@@ -18,15 +19,27 @@ impl<'a> TextWriter<'a> {
             framebuffer,
             x: 0,
             y: 0,
+            margin_x: 0,
             scale: 3,
             foreground: (235, 235, 245),
             background: (18, 18, 22),
         }
     }
 
+    pub fn clear(&mut self) {
+        self.framebuffer.clear(
+            self.background.0,
+            self.background.1,
+            self.background.2,
+        );
+        self.x = self.margin_x;
+        self.y = 60;
+    }
+
     pub fn set_position(&mut self, x: usize, y: usize) {
         self.x = x;
         self.y = y;
+        self.margin_x = x;
     }
 
     pub fn set_scale(&mut self, scale: usize) {
@@ -62,9 +75,50 @@ impl<'a> TextWriter<'a> {
         }
     }
 
+    pub fn write_char(&mut self, character: char) {
+        match character {
+            '\n' => {
+                self.new_line();
+            }
+
+            '\r' => {
+                self.x = 0;
+            }
+
+            ' ' => {
+                self.x += self.char_width();
+            }
+
+            '\u{8}' => {
+                if self.x >= self.char_width() {
+                    self.x -= self.char_width();
+
+                    self.framebuffer.draw_rect(
+                        self.x,
+                        self.y,
+                        self.char_width(),
+                        self.char_height(),
+                        self.background.0,
+                        self.background.1,
+                        self.background.2,
+                    );
+                }
+            }
+
+            character => {
+                self.draw_char(character);
+                self.x += self.char_width();
+            }
+        }
+    }
+
     fn new_line(&mut self) {
-        self.x = 0;
+        self.x = self.margin_x;
         self.y += self.char_height();
+
+        if self.y + self.char_height() > self.framebuffer.height().saturating_sub(40) {
+            self.clear();
+        }
     }
 
     fn char_width(&self) -> usize {
@@ -521,6 +575,126 @@ fn glyph(character: char) -> [u8; FONT_HEIGHT] {
             0b00000,
             0b00000,
             0b11111,
+        ],
+
+        '!' => [
+            0b00100,
+            0b00100,
+            0b00100,
+            0b00100,
+            0b00100,
+            0b00000,
+            0b00100,
+        ],
+
+        '?' => [
+            0b01110,
+            0b10001,
+            0b00001,
+            0b00010,
+            0b00100,
+            0b00000,
+            0b00100,
+        ],
+
+        ',' => [
+            0b00000,
+            0b00000,
+            0b00000,
+            0b00000,
+            0b00000,
+            0b00110,
+            0b00100,
+        ],
+
+        '/' => [
+            0b00001,
+            0b00010,
+            0b00010,
+            0b00100,
+            0b01000,
+            0b01000,
+            0b10000,
+        ],
+
+        '=' => [
+            0b00000,
+            0b11111,
+            0b00000,
+            0b11111,
+            0b00000,
+            0b00000,
+            0b00000,
+        ],
+
+        '+' => [
+            0b00000,
+            0b00100,
+            0b00100,
+            0b11111,
+            0b00100,
+            0b00100,
+            0b00000,
+        ],
+
+        '(' => [
+            0b00010,
+            0b00100,
+            0b01000,
+            0b01000,
+            0b01000,
+            0b00100,
+            0b00010,
+        ],
+
+        ')' => [
+            0b01000,
+            0b00100,
+            0b00010,
+            0b00010,
+            0b00010,
+            0b00100,
+            0b01000,
+        ],
+
+        '<' => [
+            0b00010,
+            0b00100,
+            0b01000,
+            0b10000,
+            0b01000,
+            0b00100,
+            0b00010,
+        ],
+
+        ';' => [
+            0b00000,
+            0b00100,
+            0b00100,
+            0b00000,
+            0b00110,
+            0b00100,
+            0b00000,
+        ],
+
+        '\'' => [
+            0b00100,
+            0b00100,
+            0b00010,
+            0b00000,
+            0b00000,
+            0b00000,
+            0b00000,
+        ],
+
+        '"' => [
+            0b01010,
+            0b01010,
+            0b01010,
+            0b00000,
+            0b00000,
+            0b00000,
+            0b00000,
         ],
 
         _ => [

@@ -2,8 +2,11 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 
+mod console;
 mod graphics;
 mod interrupts;
+mod keyboard;
+mod shell;
 
 use bootloader_api::{
     entry_point,
@@ -12,49 +15,40 @@ use bootloader_api::{
 
 use graphics::framebuffer::FrameBufferWriter;
 use graphics::text::TextWriter;
+use shell::Shell;
 
 entry_point!(kernel_main);
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
-    if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
-        let framebuffer = FrameBufferWriter::new(framebuffer);
+    let framebuffer = boot_info
+        .framebuffer
+        .as_mut()
+        .expect("NOVA requires a framebuffer");
 
-        let mut text = TextWriter::new(framebuffer);
+    let mut framebuffer = FrameBufferWriter::new(framebuffer);
+    framebuffer.clear(18, 18, 22);
 
-        // Clear the bootloader output.
-        text.set_background(18, 18, 22);
-        text.set_position(60, 60);
-        text.set_scale(4);
-        text.set_color(80, 160, 255);
-        text.write_str("NOVA OS");
+    let mut text = TextWriter::new(framebuffer);
 
-        text.set_position(60, 130);
-        text.set_scale(2);
-        text.set_color(235, 235, 245);
+    // Background.
+    text.set_background(18, 18, 22);
 
-        text.write_str(
-            "KERNEL INITIALIZED\n\
-             ARCHITECTURE: X86_64\n\
-             DISPLAY: 1280X720\n\
-             INTERRUPTS: INITIALIZING...\n\
-             IDT: LOADING...\n",
-        );
+    // Initialize IDT, PIC and keyboard interrupt handling.
+    interrupts::init();
 
-        // Initialize the Interrupt Descriptor Table.
-        interrupts::init();
+    // Trigger CPU breakpoint exception #3 to verify IDT exception handling.
+    x86_64::instructions::interrupts::int3();
 
-        // Trigger CPU breakpoint exception #3.
-        x86_64::instructions::interrupts::int3();
-
-        // If execution reaches this line, the IDT handler worked.
-        text.set_color(80, 220, 120);
-        text.write_str("INTERRUPT TEST: PASSED\n");
-
-        text.set_color(235, 235, 245);
-        text.write_str("NOVA KERNEL IS ALIVE\n");
-    }
+    let mut shell = Shell::new();
+    shell.print_banner(&mut text);
 
     loop {
+        // Move decoded keyboard characters from the interrupt-side
+        // queue into the shell.
+        while let Some(character) = console::read_char() {
+            shell.handle_char(character, &mut text);
+        }
+
         core::hint::spin_loop();
     }
 }

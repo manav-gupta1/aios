@@ -1,8 +1,8 @@
 pub mod keyboard;
-pub mod pci;
 pub mod timer;
+pub mod pci;
+pub mod storage;
+pub mod virtio;
 
 use spin::Mutex;
-use keyboard::KeyboardDriver;
-
-pub static KEYBOARD_DRIVER: Mutex<KeyboardDriver> = Mutex::new(KeyboardDriver::new());
+pub static KEYBOARD_DRIVER: Mutex<keyboard::KeyboardDriver> = Mutex::new(keyboard::KeyboardDriver::new());

@@ -67,14 +67,20 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // Initialize IDT, PIC, PIT timer (100 Hz), syscalls, and enable interrupts.
     interrupts::init();
 
+    crate::drivers::storage::init(&mut text);
+    crate::drivers::storage::serial_print("[MAIN] storage init done\n");
+
     // Initialize and mount persistent filesystem.
     fs::init();
+    crate::drivers::storage::serial_print("[MAIN] fs init done\n");
 
     // Verify IPC subsystem
     let _ = ipc::run_ipc_tests();
+    crate::drivers::storage::serial_print("[MAIN] IPC tests done\n");
 
     let mut shell = Shell::new();
     shell.print_banner(&mut text);
+    crate::drivers::storage::serial_print("[MAIN] banner printed\n");
 
     loop {
         let mut had_work = false;

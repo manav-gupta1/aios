@@ -28,6 +28,10 @@ static MEM_INFO: Mutex<Option<MemoryInfo>> = Mutex::new(None);
 static FRAME_ALLOCATOR: Mutex<Option<BootInfoFrameAllocator>> = Mutex::new(None);
 static PHYS_OFFSET: Mutex<Option<VirtAddr>> = Mutex::new(None);
 
+pub fn get_phys_offset() -> Option<u64> {
+    PHYS_OFFSET.lock().map(|addr| addr.as_u64())
+}
+
 pub fn init(memory_regions: &'static MemoryRegions, physical_memory_offset: Option<u64>) -> bool {
     let phys_mem_offset = match physical_memory_offset {
         Some(offset) => VirtAddr::new(offset),
@@ -73,11 +77,19 @@ pub unsafe fn init_page_table(physical_memory_offset: VirtAddr) -> OffsetPageTab
     unsafe { OffsetPageTable::new(level_4_table, physical_memory_offset) }
 }
 
-#[allow(dead_code)]
 pub fn allocate_frame() -> Option<PhysFrame> {
     let mut alloc = FRAME_ALLOCATOR.lock();
     if let Some(ref mut allocator) = *alloc {
         allocator.allocate_frame()
+    } else {
+        None
+    }
+}
+
+pub fn allocate_contiguous_frames(count: usize) -> Option<PhysFrame> {
+    let mut alloc = FRAME_ALLOCATOR.lock();
+    if let Some(ref mut allocator) = *alloc {
+        allocator.allocate_contiguous(count)
     } else {
         None
     }

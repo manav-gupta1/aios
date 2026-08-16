@@ -224,3 +224,24 @@ pub fn exit_current_task() -> ! {
         x86_64::instructions::hlt();
     }
 }
+
+pub fn block_current_task() {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut sched = SCHEDULER.lock();
+        if let Some(curr) = sched.current_task_mut() {
+            curr.state = TaskState::Blocked;
+        }
+    });
+    // Yield CPU immediately
+    // Wait, we don't have yield_now exported? We can just spin until preempted.
+    // Actually, setting Blocked and hlt-ing or waiting for timer interrupt is fine.
+    loop {
+        x86_64::instructions::interrupts::enable_and_hlt();
+        x86_64::instructions::interrupts::disable();
+        let mut sched = SCHEDULER.lock();
+        if sched.current_task_mut().map(|t| t.state) == Some(TaskState::Running) {
+            break;
+        }
+    }
+    x86_64::instructions::interrupts::enable();
+}

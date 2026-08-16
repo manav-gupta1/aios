@@ -108,6 +108,8 @@ impl Shell {
             self.cmd_touch(args, text);
         } else if command.eq_ignore_ascii_case("cat") {
             self.cmd_cat(args, text);
+        } else if command.eq_ignore_ascii_case("diskinfo") {
+            self.cmd_diskinfo(text);
         } else if command.eq_ignore_ascii_case("write") {
             self.cmd_write(args, text);
         } else if command.eq_ignore_ascii_case("rm") {
@@ -164,6 +166,7 @@ impl Shell {
         text.write_str("  meminfo    - Display memory subsystem information\n");
         text.write_str("  ps         - Display active processes table\n");
         text.write_str("  lspci      - List PCI devices\n");
+        text.write_str("  diskinfo   - Display active storage backend info\n");
         text.write_str("  vmmap      - Display memory mappings for a process\n");
         text.write_str("  wait [pid] - Wait for and collect child process\n");
         text.write_str("  jobs       - List active background and stopped jobs\n");
@@ -183,6 +186,43 @@ impl Shell {
     fn cmd_whoami(&self, text: &mut TextWriter) {
         text.set_color(235, 235, 245);
         text.write_str("kernel\n\n");
+    }
+
+    fn cmd_diskinfo(&self, text: &mut TextWriter) {
+        text.set_color(80, 160, 255);
+        text.write_str("Storage Subsystem\n");
+        text.set_color(235, 235, 245);
+        
+        let storage = crate::drivers::storage::STORAGE_DEVICE.lock();
+        if let Some(dev) = storage.as_ref() {
+            text.write_str("Backend: ");
+            text.write_str(dev.backend_name());
+            text.write_str("\n");
+            
+            let cap = dev.capacity_sectors();
+            if cap > 0 {
+                let bytes = cap * dev.sector_size() as u64;
+                text.write_str("Capacity: ");
+                
+                // Super hacky formatting for u64 since we don't have core::fmt easily available
+                // Actually we can just write the raw value
+                let mut num_str = alloc::string::String::new();
+                use core::fmt::Write;
+                let _ = write!(num_str, "{} sectors ({} bytes)", cap, bytes);
+                text.write_str(&num_str);
+                text.write_str("\n");
+            } else {
+                text.write_str("Capacity: Unknown\n");
+            }
+            
+            let mut num_str = alloc::string::String::new();
+            use core::fmt::Write;
+            let _ = write!(num_str, "Sector Size: {} bytes\n\n", dev.sector_size());
+            text.write_str(&num_str);
+        } else {
+            text.set_color(240, 80, 80);
+            text.write_str("No block device detected.\n\n");
+        }
     }
 
     fn cmd_run(&mut self, args: &str, text: &mut TextWriter) {

@@ -56,6 +56,10 @@ impl<'a> TextWriter<'a> {
 
     pub fn write_str(&mut self, text: &str) {
         for byte in text.bytes() {
+            unsafe {
+                let mut port = x86_64::instructions::port::Port::new(0x3F8);
+                port.write(byte);
+            }
             match byte {
                 b'\n' => self.new_line(),
 

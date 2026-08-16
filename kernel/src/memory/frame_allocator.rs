@@ -106,3 +106,17 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
         frame
     }
 }
+
+impl BootInfoFrameAllocator {
+    pub fn allocate_contiguous(&mut self, count: usize) -> Option<PhysFrame> {
+        if self.freelist.is_empty() {
+            let start_frame = self.usable_frames().nth(self.next)?;
+            // Assume contiguous for boot time (naive implementation for VirtIO init)
+            self.next += count;
+            self.allocated_frames += count;
+            Some(start_frame)
+        } else {
+            None // Too complex to find contiguous in freelist for now
+        }
+    }
+}

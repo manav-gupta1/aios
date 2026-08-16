@@ -1,6 +1,6 @@
-mod ata;
+pub mod ata;
 
-use ata::{AtaPio, SECTOR_SIZE};
+use ata::SECTOR_SIZE;
 use spin::Mutex;
 
 pub const MAX_NODES: usize = 64;
@@ -248,22 +248,32 @@ impl FileSystem {
     }
 
     pub fn init_storage(&mut self) -> bool {
-        if !AtaPio::is_available() {
+        crate::drivers::storage::serial_print("[FS] init_storage start\n");
+        let storage = crate::drivers::storage::STORAGE_DEVICE.lock();
+        if storage.is_none() {
             self.is_disk_persistent = false;
+            crate::drivers::storage::serial_print("[FS] no storage device\n");
             return false;
         }
+        let dev = storage.as_ref().unwrap();
 
+        crate::drivers::storage::serial_print("[FS] storage acquired, reading superblock\n");
         let mut sector_buf = [0u8; SECTOR_SIZE];
-        if AtaPio::read_sector(SUPERBLOCK_LBA, &mut sector_buf).is_ok() {
+        if dev.read_sector(SUPERBLOCK_LBA, &mut sector_buf).is_ok() {
+            crate::drivers::storage::serial_print("[FS] superblock read OK\n");
             if let Some(sb) = Superblock::deserialize(&sector_buf) {
                 // Detected existing NovaFS superblock, mount it!
                 self.superblock = sb;
                 let mut loaded_all = true;
 
+                crate::drivers::storage::serial_print("[FS] starting to read inodes\n");
                 for i in 0..MAX_NODES {
                     let inode_lba = INODE_TABLE_START_LBA + i as u32;
                     let mut node_buf = [0u8; SECTOR_SIZE];
-                    if AtaPio::read_sector(inode_lba, &mut node_buf).is_ok() {
+                    if dev.read_sector(inode_lba, &mut node_buf).is_ok() {
+                        if i % 10 == 0 {
+                            crate::drivers::storage::serial_print(".");
+                        }
                         if let Some(node) = Node::deserialize(&node_buf) {
                             self.nodes[i] = node;
                         } else {
@@ -285,6 +295,9 @@ impl FileSystem {
             }
         }
 
+        // Drop the storage lock before calling format_disk to avoid deadlock
+        drop(storage);
+
         // Format and create fresh NovaFS on disk
         let _ = self.format_disk();
         self.ensure_default_system_files();
@@ -292,9 +305,13 @@ impl FileSystem {
     }
 
     pub fn format_disk(&mut self) -> Result<(), FsError> {
-        if !AtaPio::is_available() {
+        crate::drivers::storage::serial_print("[FS] format_disk start\n");
+        let storage = crate::drivers::storage::STORAGE_DEVICE.lock();
+        if storage.is_none() {
+            crate::drivers::storage::serial_print("[FS] DiskUnavailable\n");
             return Err(FsError::DiskUnavailable);
         }
+        let dev = storage.as_ref().unwrap();
 
         self.nodes = [const { Node::empty() }; MAX_NODES];
         self.nodes[0].is_used = true;
@@ -308,13 +325,16 @@ impl FileSystem {
 
         // Write superblock
         let sb_buf = self.superblock.serialize();
-        if AtaPio::write_sector(SUPERBLOCK_LBA, &sb_buf).is_err() {
+        crate::drivers::storage::serial_print("[FS] writing superblock\n");
+        if dev.write_sector(SUPERBLOCK_LBA, &sb_buf).is_err() {
+            crate::drivers::storage::serial_print("[FS] IoError on superblock\n");
             return Err(FsError::IoError);
         }
+        crate::drivers::storage::serial_print("[FS] superblock written\n");
 
         // Write root inode
         let root_buf = self.nodes[0].serialize();
-        if AtaPio::write_sector(INODE_TABLE_START_LBA, &root_buf).is_err() {
+        if dev.write_sector(INODE_TABLE_START_LBA, &root_buf).is_err() {
             return Err(FsError::IoError);
         }
 
@@ -322,7 +342,7 @@ impl FileSystem {
         let empty_buf = [0u8; SECTOR_SIZE];
         for i in 1..MAX_NODES {
             let lba = INODE_TABLE_START_LBA + i as u32;
-            if AtaPio::write_sector(lba, &empty_buf).is_err() {
+            if dev.write_sector(lba, &empty_buf).is_err() {
                 return Err(FsError::IoError);
             }
         }
@@ -349,13 +369,18 @@ impl FileSystem {
 
         let lba = INODE_TABLE_START_LBA + idx as u32;
         let buf = self.nodes[idx].serialize();
-        if AtaPio::write_sector(lba, &buf).is_err() {
+        let storage = crate::drivers::storage::STORAGE_DEVICE.lock();
+        if storage.is_none() {
+            return Err(FsError::DiskUnavailable);
+        }
+        let dev = storage.as_ref().unwrap();
+        if dev.write_sector(lba, &buf).is_err() {
             return Err(FsError::IoError);
         }
 
         self.update_usage_counts();
         let sb_buf = self.superblock.serialize();
-        if AtaPio::write_sector(SUPERBLOCK_LBA, &sb_buf).is_err() {
+        if dev.write_sector(SUPERBLOCK_LBA, &sb_buf).is_err() {
             return Err(FsError::IoError);
         }
 

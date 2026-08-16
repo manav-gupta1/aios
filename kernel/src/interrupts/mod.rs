@@ -64,6 +64,10 @@ pub fn init() {
         // Keyboard IRQ1 -> interrupt vector 33.
         (&mut *idt)[InterruptIndex::Keyboard.as_u8()]
             .set_handler_fn(keyboard_handler);
+            
+        (&mut *idt)[32 + 9].set_handler_fn(irq9_handler);
+        (&mut *idt)[32 + 10].set_handler_fn(irq10_handler);
+        (&mut *idt)[32 + 11].set_handler_fn(irq11_handler);
 
         // Syscall vector 0x80 (128) with Ring 3 privilege level.
         (&mut *idt)[SYSCALL_VECTOR]
@@ -120,10 +124,12 @@ extern "x86-interrupt" fn gpf_handler(
 ) {
     if (stack_frame.code_segment.0 & 3) == 3 {
         // User space fault - terminate user process safely
+        crate::drivers::storage::serial_print("\n[Fault] User process error: General Protection Fault (terminating task)\n");
         crate::console::write_str("\n[Fault] User process error: General Protection Fault (terminating task)\n");
         crate::process::PROCESS_TABLE.lock().exit_process(crate::process::current_pid(), 1);
         crate::task::scheduler::exit_current_task();
     } else {
+        crate::drivers::storage::serial_print("\n[Fault] Kernel GPF\n");
         loop {
             core::hint::spin_loop();
         }
@@ -151,8 +157,14 @@ extern "x86-interrupt" fn page_fault_handler(
         crate::process::PROCESS_TABLE.lock().exit_process(crate::process::current_pid(), 1);
         crate::task::scheduler::exit_current_task();
     } else {
+        crate::drivers::storage::serial_print("\n[Fault] Kernel Page Fault at: ");
+        let mut num_str = alloc::string::String::new();
+        use core::fmt::Write;
+        let _ = write!(num_str, "{:#x}\n", fault_addr.as_u64());
+        crate::drivers::storage::serial_print(&num_str);
+        
         loop {
-            x86_64::instructions::hlt();
+            core::hint::spin_loop();
         }
     }
 }
@@ -312,5 +324,47 @@ extern "x86-interrupt" fn keyboard_handler(
         (*pics).notify_end_of_interrupt(
             InterruptIndex::Keyboard.as_u8(),
         );
+    }
+}
+
+extern "x86-interrupt" fn irq9_handler(_stack_frame: InterruptStackFrame) {
+    crate::drivers::virtio::block::handle_irq();
+    unsafe {
+        let pics = core::ptr::addr_of_mut!(PICS);
+        (*pics).notify_end_of_interrupt(32 + 9);
+    }
+}
+
+extern "x86-interrupt" fn irq10_handler(_stack_frame: InterruptStackFrame) {
+    crate::drivers::virtio::block::handle_irq();
+    unsafe {
+        let pics = core::ptr::addr_of_mut!(PICS);
+        (*pics).notify_end_of_interrupt(32 + 10);
+    }
+}
+
+extern "x86-interrupt" fn irq11_handler(_stack_frame: InterruptStackFrame) {
+    crate::drivers::virtio::block::handle_irq();
+    unsafe {
+        let pics = core::ptr::addr_of_mut!(PICS);
+        (*pics).notify_end_of_interrupt(32 + 11);
+    }
+}
+
+pub fn unmask_irq(irq: u8) {
+    unsafe {
+        let pics = core::ptr::addr_of_mut!(PICS);
+        let mut mask1 = 0xFF;
+        let mut mask2 = 0xFF;
+        // Assume default mask (Timer + Keyboard unmasked)
+        mask1 &= !0x03; 
+        
+        if irq < 8 {
+            mask1 &= !(1 << irq);
+        } else {
+            mask1 &= !(1 << 2); // Cascade
+            mask2 &= !(1 << (irq - 8));
+        }
+        (*pics).write_masks(mask1, mask2);
     }
 }

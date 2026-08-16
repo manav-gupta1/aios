@@ -1,0 +1,433 @@
+use alloc::string::String;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use spin::Mutex;
+use super::pid::PidAllocator;
+use super::process::{FileDescriptor, Process, ProcessAddressSpace, ProcessState};
+use crate::ipc::{Pipe, PipeReadError, PipeWriteError};
+use crate::task::TaskState;
+
+#[derive(Debug, Clone)]
+pub struct ProcessSnapshot {
+    pub pid: usize,
+    pub ppid: usize,
+    pub state: ProcessState,
+    pub name: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitError {
+    NoChild,
+    WouldBlock,
+    #[allow(dead_code)]
+    InvalidPid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipeReadResult {
+    WouldBlock,
+    BadFd,
+    NotReadable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipeWriteResult {
+    WouldBlock,
+    BrokenPipe,
+    BadFd,
+    NotWritable,
+}
+
+pub struct ProcessTable {
+    pub(crate) processes: Vec<Process>,
+    pub(crate) pid_allocator: PidAllocator,
+    initialized: bool,
+}
+
+impl ProcessTable {
+    pub const fn new() -> Self {
+        ProcessTable {
+            processes: Vec::new(),
+            pid_allocator: PidAllocator::new(),
+            initialized: false,
+        }
+    }
+
+    pub fn init(&mut self) {
+        if self.initialized {
+            return;
+        }
+        let init_proc = Process::new_init();
+        self.processes.push(init_proc);
+        self.initialized = true;
+    }
+
+    pub fn spawn_user_process(
+        &mut self,
+        parent_pid: usize,
+        name: &'static str,
+        rip: u64,
+        rsp: u64,
+        address_space: ProcessAddressSpace,
+    ) -> Result<usize, &'static str> {
+        let new_pid = self.pid_allocator.allocate();
+        let main_task_id = crate::task::spawn_user(new_pid, name, rip, rsp);
+        let proc = Process::new_user(new_pid, parent_pid, name, main_task_id, address_space);
+        self.processes.push(proc);
+        Ok(new_pid)
+    }
+
+    pub fn exit_process(&mut self, pid: usize, status: i32) {
+        let mut parent_pid_to_wake = None;
+        let mut parent_task_id_to_wake = None;
+        let mut pids_to_wake_from_fds = Vec::new();
+
+        // 1. Mark this process as Zombie and record exit status
+        if let Some(proc) = self.processes.iter_mut().find(|p| p.pid == pid) {
+            proc.state = ProcessState::Zombie;
+            proc.exit_status = Some(status);
+            let ppid = proc.ppid;
+
+            // Close all open FDs for this exiting process and gather any tasks to wake
+            for fd_opt in proc.fd_table.iter_mut() {
+                if let Some(desc) = fd_opt.take() {
+                    match desc {
+                        FileDescriptor::PipeRead(pipe) => {
+                            let (_, to_wake) = pipe.lock().close_read();
+                            pids_to_wake_from_fds.extend(to_wake);
+                        }
+                        FileDescriptor::PipeWrite(pipe) => {
+                            let (_, to_wake) = pipe.lock().close_write();
+                            pids_to_wake_from_fds.extend(to_wake);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // Check if parent is Blocked waiting for this child
+            if let Some(parent) = self.processes.iter().find(|p| p.pid == ppid) {
+                if parent.state == ProcessState::Blocked {
+                    match parent.waiting_target_pid {
+                        Some(None) => {
+                            parent_pid_to_wake = Some(parent.pid);
+                            parent_task_id_to_wake = Some(parent.main_task_id);
+                        }
+                        Some(Some(target_pid)) if target_pid == pid => {
+                            parent_pid_to_wake = Some(parent.pid);
+                            parent_task_id_to_wake = Some(parent.main_task_id);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        // 2. Unblock parent if waiting
+        if let Some(ppid) = parent_pid_to_wake {
+            if let Some(parent) = self.processes.iter_mut().find(|p| p.pid == ppid) {
+                parent.state = ProcessState::Ready;
+                parent.waiting_target_pid = None;
+            }
+            if let Some(task_id) = parent_task_id_to_wake {
+                crate::task::set_task_state(task_id, TaskState::Ready);
+            }
+        }
+
+        // 3. Unblock any tasks waiting on closed FDs
+        for wake_pid in pids_to_wake_from_fds {
+            self.wake_process_by_pid(wake_pid);
+        }
+
+        // 4. Reparent orphan children of this exiting process to PID 1 (init)
+        for proc in &mut self.processes {
+            if proc.ppid == pid {
+                proc.ppid = 1;
+            }
+        }
+
+        // 5. Mark scheduler task as Finished
+        if let Some(proc) = self.processes.iter().find(|p| p.pid == pid) {
+            crate::task::set_task_state(proc.main_task_id, TaskState::Finished);
+        }
+    }
+
+    pub fn waitpid(
+        &mut self,
+        caller_pid: usize,
+        target: Option<usize>,
+    ) -> Result<(usize, i32), WaitError> {
+        if let Some(t) = target {
+            // Find target child
+            let child_idx = self
+                .processes
+                .iter()
+                .position(|p| p.pid == t && p.ppid == caller_pid)
+                .ok_or(WaitError::NoChild)?;
+
+            if self.processes[child_idx].state == ProcessState::Zombie {
+                let status = self.processes[child_idx].exit_status.unwrap_or(0);
+                self.processes[child_idx].address_space.unmap_all();
+                self.processes.remove(child_idx);
+                self.pid_allocator.deallocate(t);
+                return Ok((t, status));
+            } else {
+                // Child is still running -> block caller
+                if let Some(caller) = self.processes.iter_mut().find(|p| p.pid == caller_pid) {
+                    caller.state = ProcessState::Blocked;
+                    caller.waiting_target_pid = Some(Some(t));
+                    crate::task::set_task_state(caller.main_task_id, TaskState::Blocked);
+                }
+                return Err(WaitError::WouldBlock);
+            }
+        } else {
+            // Wait for ANY child
+            let has_children = self.processes.iter().any(|p| p.ppid == caller_pid);
+            if !has_children {
+                return Err(WaitError::NoChild);
+            }
+
+            let zombie_idx = self
+                .processes
+                .iter()
+                .position(|p| p.ppid == caller_pid && p.state == ProcessState::Zombie);
+
+            if let Some(idx) = zombie_idx {
+                let child_pid = self.processes[idx].pid;
+                let status = self.processes[idx].exit_status.unwrap_or(0);
+                self.processes[idx].address_space.unmap_all();
+                self.processes.remove(idx);
+                self.pid_allocator.deallocate(child_pid);
+                return Ok((child_pid, status));
+            } else {
+                // All children are still running -> block caller
+                if let Some(caller) = self.processes.iter_mut().find(|p| p.pid == caller_pid) {
+                    caller.state = ProcessState::Blocked;
+                    caller.waiting_target_pid = Some(None);
+                    crate::task::set_task_state(caller.main_task_id, TaskState::Blocked);
+                }
+                return Err(WaitError::WouldBlock);
+            }
+        }
+    }
+
+    pub fn exec_current_process(
+        &mut self,
+        caller_pid: usize,
+        path: &str,
+        elf_data: &[u8],
+    ) -> Result<(u64, u64), &'static str> {
+        let caller_idx = self
+            .processes
+            .iter()
+            .position(|p| p.pid == caller_pid)
+            .ok_or("Caller process not found")?;
+
+        // 1. Unmap caller's old address space first
+        self.processes[caller_idx].address_space.unmap_all();
+
+        // 2. Load and map new ELF segments and stack
+        let (loaded, new_address_space) =
+            crate::elf::loader::load_elf(elf_data).map_err(|_| "Failed to load ELF")?;
+
+        // 3. Assign new address space and update process name
+        self.processes[caller_idx].address_space = new_address_space;
+        let prog_name = path.rsplit('/').next().unwrap_or(path);
+        self.processes[caller_idx].name = String::from(prog_name);
+
+        // 4. Reset task execution context to the new entry point and user stack
+        let task_id = self.processes[caller_idx].main_task_id;
+        crate::task::reset_task_user_context(
+            task_id,
+            "user_exec",
+            loaded.entry_point,
+            loaded.user_rsp,
+        );
+
+        Ok((loaded.entry_point, loaded.user_rsp))
+    }
+
+    pub fn create_pipe(&mut self, caller_pid: usize) -> Result<(usize, usize), &'static str> {
+        let proc = self
+            .processes
+            .iter_mut()
+            .find(|p| p.pid == caller_pid)
+            .ok_or("Process not found")?;
+
+        let pipe = Arc::new(Mutex::new(Pipe::new()));
+        let rfd = proc.alloc_fd(FileDescriptor::PipeRead(Arc::clone(&pipe)));
+        let wfd = proc.alloc_fd(FileDescriptor::PipeWrite(pipe));
+
+        Ok((rfd, wfd))
+    }
+
+    pub fn read_fd(
+        &mut self,
+        caller_pid: usize,
+        fd: usize,
+        buf: &mut [u8],
+    ) -> Result<usize, PipeReadResult> {
+        let proc_opt = self.processes.iter().find(|p| p.pid == caller_pid);
+        let fd_desc = match proc_opt {
+            Some(p) => p.get_fd(fd).ok_or(PipeReadResult::BadFd)?,
+            None => return Err(PipeReadResult::BadFd),
+        };
+
+        match fd_desc {
+            FileDescriptor::PipeRead(pipe) => {
+                let mut pipe_guard = pipe.lock();
+                let res = pipe_guard.read(caller_pid, buf);
+                match res {
+                    Ok(n) => {
+                        let to_wake = pipe_guard.take_writers_to_wake();
+                        drop(pipe_guard);
+                        for wake_pid in to_wake {
+                            self.wake_process_by_pid(wake_pid);
+                        }
+                        Ok(n)
+                    }
+                    Err(PipeReadError::WouldBlock) => {
+                        drop(pipe_guard);
+                        if let Some(proc) = self.processes.iter_mut().find(|p| p.pid == caller_pid) {
+                            proc.state = ProcessState::Blocked;
+                            crate::task::set_task_state(proc.main_task_id, TaskState::Blocked);
+                        }
+                        Err(PipeReadResult::WouldBlock)
+                    }
+                }
+            }
+            FileDescriptor::Stdin => {
+                // Not supported for raw pipe read
+                Err(PipeReadResult::NotReadable)
+            }
+            _ => Err(PipeReadResult::NotReadable),
+        }
+    }
+
+    pub fn write_fd(
+        &mut self,
+        caller_pid: usize,
+        fd: usize,
+        buf: &[u8],
+    ) -> Result<usize, PipeWriteResult> {
+        let proc_opt = self.processes.iter().find(|p| p.pid == caller_pid);
+        let fd_desc = match proc_opt {
+            Some(p) => p.get_fd(fd).ok_or(PipeWriteResult::BadFd)?,
+            None => return Err(PipeWriteResult::BadFd),
+        };
+
+        match fd_desc {
+            FileDescriptor::PipeWrite(pipe) => {
+                let mut pipe_guard = pipe.lock();
+                let res = pipe_guard.write(caller_pid, buf);
+                match res {
+                    Ok(n) => {
+                        let to_wake = pipe_guard.take_readers_to_wake();
+                        drop(pipe_guard);
+                        for wake_pid in to_wake {
+                            self.wake_process_by_pid(wake_pid);
+                        }
+                        Ok(n)
+                    }
+                    Err(PipeWriteError::WouldBlock) => {
+                        drop(pipe_guard);
+                        if let Some(proc) = self.processes.iter_mut().find(|p| p.pid == caller_pid) {
+                            proc.state = ProcessState::Blocked;
+                            crate::task::set_task_state(proc.main_task_id, TaskState::Blocked);
+                        }
+                        Err(PipeWriteResult::WouldBlock)
+                    }
+                    Err(PipeWriteError::BrokenPipe) => {
+                        drop(pipe_guard);
+                        Err(PipeWriteResult::BrokenPipe)
+                    }
+                }
+            }
+            FileDescriptor::Stdout | FileDescriptor::Stderr => {
+                if let Ok(s) = core::str::from_utf8(buf) {
+                    crate::syscall::USER_OUTPUT_RECEIVED.store(true, core::sync::atomic::Ordering::Release);
+                    crate::console::write_str(s);
+                }
+                Ok(buf.len())
+            }
+            _ => Err(PipeWriteResult::NotWritable),
+        }
+    }
+
+    pub fn close_fd(&mut self, caller_pid: usize, fd: usize) -> Result<(), &'static str> {
+        let proc = self
+            .processes
+            .iter_mut()
+            .find(|p| p.pid == caller_pid)
+            .ok_or("Process not found")?;
+
+        let desc = proc.close_fd(fd).ok_or("Bad file descriptor")?;
+        let to_wake = match desc {
+            FileDescriptor::PipeRead(pipe) => {
+                let (_, list) = pipe.lock().close_read();
+                list
+            }
+            FileDescriptor::PipeWrite(pipe) => {
+                let (_, list) = pipe.lock().close_write();
+                list
+            }
+            _ => Vec::new(),
+        };
+
+        for wake_pid in to_wake {
+            self.wake_process_by_pid(wake_pid);
+        }
+
+        Ok(())
+    }
+
+    pub fn wake_process_by_pid(&mut self, pid: usize) {
+        if let Some(proc) = self.processes.iter_mut().find(|p| p.pid == pid) {
+            if proc.state == ProcessState::Blocked {
+                proc.state = ProcessState::Ready;
+                crate::task::set_task_state(proc.main_task_id, TaskState::Ready);
+            }
+        }
+    }
+
+    pub fn snapshots(&self) -> Vec<ProcessSnapshot> {
+        let mut snaps = Vec::with_capacity(self.processes.len());
+        for proc in &self.processes {
+            snaps.push(ProcessSnapshot {
+                pid: proc.pid,
+                ppid: proc.ppid,
+                state: proc.state,
+                name: proc.name.clone(),
+            });
+        }
+        snaps
+    }
+
+    pub fn fork_process(
+        &mut self,
+        caller_pid: usize,
+        frame_ptr: *mut u64,
+    ) -> Result<usize, &'static str> {
+        crate::process::fork::do_fork(self, caller_pid, frame_ptr)
+    }
+
+    pub fn handle_cow_fault(&mut self, caller_pid: usize, fault_addr: x86_64::VirtAddr) -> Result<(), &'static str> {
+        let page = x86_64::structures::paging::Page::<x86_64::structures::paging::Size4KiB>::containing_address(fault_addr);
+        let proc = self
+            .processes
+            .iter_mut()
+            .find(|p| p.pid == caller_pid)
+            .ok_or("Process not found")?;
+
+        if !proc.address_space.is_cow(page) {
+            return Err("Not a COW page");
+        }
+
+        crate::memory::resolve_cow_page(page)?;
+        proc.address_space.unmark_cow(page);
+        Ok(())
+    }
+}
+
+pub static PROCESS_TABLE: Mutex<ProcessTable> = Mutex::new(ProcessTable::new());

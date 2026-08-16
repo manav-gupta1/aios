@@ -1,6 +1,6 @@
 use spin::Mutex;
 
-const BUFFER_SIZE: usize = 256;
+const BUFFER_SIZE: usize = 512;
 
 struct CharBuffer {
     buffer: [char; BUFFER_SIZE],
@@ -42,6 +42,7 @@ impl CharBuffer {
 }
 
 static CHAR_BUFFER: Mutex<CharBuffer> = Mutex::new(CharBuffer::new());
+static OUT_BUFFER: Mutex<CharBuffer> = Mutex::new(CharBuffer::new());
 
 pub fn write_char(character: char) {
     x86_64::instructions::interrupts::without_interrupts(|| {
@@ -55,3 +56,17 @@ pub fn read_char() -> Option<char> {
     })
 }
 
+pub fn write_str(s: &str) {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut buf = OUT_BUFFER.lock();
+        for c in s.chars() {
+            buf.push(c);
+        }
+    });
+}
+
+pub fn read_out_char() -> Option<char> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        OUT_BUFFER.lock().pop()
+    })
+}

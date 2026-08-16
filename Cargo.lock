@@ -90,6 +90,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "child"
+version = "0.1.0"
+
+[[package]]
 name = "const_fn"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -104,6 +108,10 @@ dependencies = [
  "libc",
  "windows-sys",
 ]
+
+[[package]]
+name = "exec-test"
+version = "0.1.0"
 
 [[package]]
 name = "fastrand"
@@ -138,6 +146,10 @@ dependencies = [
  "libc",
  "r-efi",
 ]
+
+[[package]]
+name = "hello"
+version = "0.1.0"
 
 [[package]]
 name = "itoa"
@@ -236,6 +248,10 @@ checksum = "62d9a86c292b165f757e47e7fd66855def189b2564609bc4203727b27c33db22"
 dependencies = [
  "x86_64",
 ]
+
+[[package]]
+name = "pipe-test"
+version = "0.1.0"
 
 [[package]]
 name = "proc-macro2"

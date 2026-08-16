@@ -1,9 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["kernel", "bootloader"]
+members = ["kernel", "bootloader", "user/hello", "user/child", "user/exec-test", "user/pipe-test"]
 
 [profile.dev]
 panic = "abort"
 
 [profile.release]
 panic = "abort"
+strip = true
+opt-level = "z"
+lto = true
+

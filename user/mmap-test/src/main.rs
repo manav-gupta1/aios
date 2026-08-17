@@ -81,7 +81,7 @@ fn sys_munmap(addr: usize, length: usize) -> usize {
     unsafe { syscall2(SYS_MUNMAP, addr, length) }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
     print("mmap-test: Starting test...\n");
 

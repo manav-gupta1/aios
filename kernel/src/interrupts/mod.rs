@@ -153,8 +153,25 @@ extern "x86-interrupt" fn page_fault_handler(
 
     if (stack_frame.code_segment.0 & 3) == 3 {
         // User space fault - terminate user process safely
+        let pid = crate::process::current_pid();
+        crate::drivers::storage::serial_print("\n[Fault] User process Page Fault at RIP: ");
+        let mut num_str = alloc::string::String::new();
+        use core::fmt::Write;
+        let mapped = crate::memory::translate_page(x86_64::structures::paging::Page::<x86_64::structures::paging::Size4KiB>::containing_address(fault_addr)).is_some();
+        let _ = write!(
+            num_str,
+            "{:#x}, Addr: {:#x}, RSP: {:#x}, PID: {}, Error: {:?}, Mapped: {}\n",
+            stack_frame.instruction_pointer.as_u64(),
+            fault_addr.as_u64(),
+            stack_frame.stack_pointer.as_u64(),
+            pid,
+            error_code,
+            mapped
+        );
+        crate::drivers::storage::serial_print(&num_str);
+        
         crate::console::write_str("\n[Fault] User process error: Page Fault (terminating task)\n");
-        crate::process::PROCESS_TABLE.lock().exit_process(crate::process::current_pid(), 1);
+        crate::process::PROCESS_TABLE.lock().exit_process(pid, 1);
         crate::task::scheduler::exit_current_task();
     } else {
         crate::drivers::storage::serial_print("\n[Fault] Kernel Page Fault at: ");
@@ -327,25 +344,44 @@ extern "x86-interrupt" fn keyboard_handler(
     }
 }
 
+static mut IRQ9_COUNT: u64 = 0;
 extern "x86-interrupt" fn irq9_handler(_stack_frame: InterruptStackFrame) {
     crate::drivers::virtio::block::handle_irq();
+    crate::net::handle_network_interrupt();
     unsafe {
+        IRQ9_COUNT += 1;
+        if IRQ9_COUNT % 100_000 == 0 {
+            crate::drivers::storage::serial_print("IRQ9 Storm!\n");
+        }
         let pics = core::ptr::addr_of_mut!(PICS);
         (*pics).notify_end_of_interrupt(32 + 9);
     }
 }
 
+static mut IRQ10_COUNT: u64 = 0;
 extern "x86-interrupt" fn irq10_handler(_stack_frame: InterruptStackFrame) {
     crate::drivers::virtio::block::handle_irq();
+    crate::net::handle_network_interrupt();
     unsafe {
+        IRQ10_COUNT += 1;
+        if IRQ10_COUNT % 100_000 == 0 {
+            crate::drivers::storage::serial_print("IRQ10 Storm!\n");
+        }
         let pics = core::ptr::addr_of_mut!(PICS);
         (*pics).notify_end_of_interrupt(32 + 10);
     }
 }
 
+static mut IRQ11_COUNT: u64 = 0;
+
 extern "x86-interrupt" fn irq11_handler(_stack_frame: InterruptStackFrame) {
     crate::drivers::virtio::block::handle_irq();
+    crate::net::handle_network_interrupt();
     unsafe {
+        IRQ11_COUNT += 1;
+        if IRQ11_COUNT % 100_000 == 0 {
+            crate::drivers::storage::serial_print("IRQ11 Storm!\n");
+        }
         let pics = core::ptr::addr_of_mut!(PICS);
         (*pics).notify_end_of_interrupt(32 + 11);
     }

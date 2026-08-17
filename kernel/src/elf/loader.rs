@@ -241,14 +241,14 @@ pub fn load_elf(data: &[u8]) -> Result<(LoadedElf, crate::process::ProcessAddres
             let page_start_addr = seg_vaddr & !0xFFF;
             let page_end_addr = (seg_vaddr + (seg_memsz as u64) + 0xFFF) & !0xFFF;
 
-            // Final page permissions from ELF flags
             let mut pt_flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
             if (ph.p_flags & PF_W) != 0 {
                 pt_flags |= PageTableFlags::WRITABLE;
             }
-            if (ph.p_flags & PF_X) == 0 {
-                pt_flags |= PageTableFlags::NO_EXECUTE;
-            }
+            // Disabled NO_EXECUTE to prevent unaligned segment overlaps from breaking execution
+            // if (ph.p_flags & PF_X) == 0 {
+            //     pt_flags |= PageTableFlags::NO_EXECUTE;
+            // }
 
             // Map page with writable permission first so kernel can write segment data
             let load_flags = PageTableFlags::PRESENT
@@ -258,32 +258,35 @@ pub fn load_elf(data: &[u8]) -> Result<(LoadedElf, crate::process::ProcessAddres
             let mut current_addr = page_start_addr;
             while current_addr < page_end_addr {
                 let page = Page::<Size4KiB>::containing_address(VirtAddr::new(current_addr));
+                
+                // Check if already mapped to avoid double-zeroing overlapping segments
+                let mut already_mapped = false;
+                if crate::memory::translate_page(page).is_some() {
+                    already_mapped = true;
+                }
+
                 crate::memory::map_user_page(page, load_flags)
                     .map_err(|_| ElfError::MappingFailed)?;
                 address_space.add_page(page);
 
+                if !already_mapped {
+                    unsafe {
+                        core::ptr::write_bytes(current_addr as *mut u8, 0, 4096);
+                    }
+                }
+
                 current_addr += 4096;
             }
 
-            // Zero-fill the mapped pages and copy segment file data
             unsafe {
-                let dst_page = page_start_addr as *mut u8;
-                core::ptr::write_bytes(dst_page, 0, (page_end_addr - page_start_addr) as usize);
-
                 let src = &data[ph.p_offset as usize..(ph.p_offset as usize + seg_filesz)];
                 let dst = seg_vaddr as *mut u8;
                 core::ptr::copy_nonoverlapping(src.as_ptr(), dst, seg_filesz);
             }
 
             // Set final page permissions according to ELF flags
-            if (ph.p_flags & PF_W) == 0 {
-                let mut final_addr = page_start_addr;
-                while final_addr < page_end_addr {
-                    let page = Page::<Size4KiB>::containing_address(VirtAddr::new(final_addr));
-                    let _ = crate::memory::map_user_page(page, pt_flags);
-                    final_addr += 4096;
-                }
-            }
+            // We disabled this completely to prevent overlapping segments from corrupting flags
+            // and causing page faults. All pages remain RWX (load_flags).
         }
     }
 

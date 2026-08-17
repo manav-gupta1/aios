@@ -1,0 +1,11 @@
+[package]
+name = "http-get"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+nova-net = { path = "../nova-net" }
+
+[profile.release]
+panic = "abort"

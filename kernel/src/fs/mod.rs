@@ -289,6 +289,7 @@ impl FileSystem {
                 if loaded_all && self.nodes[0].is_used && self.nodes[0].kind == NodeKind::Directory {
                     self.is_disk_persistent = true;
                     self.cwd = 0;
+                    drop(storage);
                     self.ensure_default_system_files();
                     return true;
                 }
@@ -642,6 +643,7 @@ impl FileSystem {
     }
 
     pub fn ensure_default_system_files(&mut self) {
+        crate::drivers::storage::serial_print("[FS] ensure_default_system_files called\n");
         if self.resolve_path("/bin").is_err() {
             let _ = self.create_dir("/bin");
         }
@@ -653,6 +655,11 @@ impl FileSystem {
         let _ = self.write_file("/bin/cow-test", crate::elf::ELF_COW_TEST_BIN);
         let _ = self.write_file("/bin/shared-mmap-test", crate::elf::ELF_SHARED_MMAP_TEST_BIN);
         let _ = self.write_file("/bin/signal-test", crate::elf::ELF_SIGNAL_TEST_BIN);
+        let _ = self.write_file("/bin/udp-test", crate::elf::ELF_UDP_TEST_BIN);
+        // let elf_data = crate::elf::ELF_HTTP_GET_BIN;
+        // if self.write_file("/bin/http-get", elf_data).is_err() {
+        //     crate::drivers::storage::serial_print("Failed to write /bin/http-get\n");
+        // }
     }
 
     pub fn remove_file(&mut self, path: &str) -> Result<(), FsError> {

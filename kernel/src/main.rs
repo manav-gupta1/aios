@@ -17,6 +17,7 @@ mod process;
 mod shell;
 mod syscall;
 mod task;
+pub mod net;
 pub mod tty;
 mod userspace;
 
@@ -70,6 +71,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     crate::drivers::storage::init(&mut text);
     crate::drivers::storage::serial_print("[MAIN] storage init done\n");
 
+    crate::drivers::network::init(&mut text);
+    crate::net::init();
+    crate::drivers::storage::serial_print("[MAIN] network init done\n");
+
     // Initialize and mount persistent filesystem.
     fs::init();
     crate::drivers::storage::serial_print("[MAIN] fs init done\n");
@@ -81,6 +86,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let mut shell = Shell::new();
     shell.print_banner(&mut text);
     crate::drivers::storage::serial_print("[MAIN] banner printed\n");
+
+    // Drop into interactive shell
 
     loop {
         let mut had_work = false;
@@ -106,7 +113,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 use core::panic::PanicInfo;
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
+    let msg = alloc::format!("PANIC: {}\n", info);
+    crate::drivers::storage::serial_print(&msg);
     loop {
         core::hint::spin_loop();
     }

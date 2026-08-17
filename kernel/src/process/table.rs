@@ -101,6 +101,9 @@ impl ProcessTable {
                             let (_, to_wake) = pipe.lock().close_write();
                             pids_to_wake_from_fds.extend(to_wake);
                         }
+                        FileDescriptor::Socket(id) => {
+                            crate::net::socket::SOCKET_TABLE.lock().close_socket(id);
+                        }
                         _ => {}
                     }
                 }
@@ -419,6 +422,10 @@ impl ProcessTable {
             FileDescriptor::PipeWrite(pipe) => {
                 let (_, list) = pipe.lock().close_write();
                 list
+            }
+            FileDescriptor::Socket(id) => {
+                crate::net::socket::SOCKET_TABLE.lock().close_socket(id);
+                Vec::new()
             }
             _ => Vec::new(),
         };

@@ -1,0 +1,69 @@
+INFO : Framebuffer info: FrameBufferInfo { byte_len: 2764800, width: 1280, height: 720, pixel_format: Bgr, bytes_per_pixel: 3, stride: 1280 }
+INFO : 4th Stage
+INFO : BiosInfo { stage_4: Region { start: 130000, len: 25260 }, kernel: Region { start: 1000000, len: 98f60 }, ramdisk: Region { start: 1099000, len: 0 }, config_file: Region { start: 1099000, len: 0 }, last_used_addr: 1098fff, framebuffer: BiosFramebufferInfo { region: Region { start: fd000000, len: 2a3000 }, width: 500, height: 2d0, bytes_per_pixel: 3, stride: 500, pixel_format: Bgr }, memory_map_addr: 12140, memory_map_len: 7 }
+INFO : BIOS boot
+INFO : Elf file loaded at Pointer {
+    addr: 0x0000000001000000,
+    metadata: 626528,
+}
+INFO : virtual_address_offset: 0x10000000000
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(4), offset: 0, virtual_addr: 0, physical_addr: 0, file_size: 2a780, mem_size: 2a780, align: 1000 })
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(5), offset: 2a780, virtual_addr: 2b780, physical_addr: 2b780, file_size: 611e5, mem_size: 611e5, align: 1000 })
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(6), offset: 8b968, virtual_addr: 8d968, physical_addr: 8d968, file_size: 3ae8, mem_size: 4698, align: 1000 })
+INFO : Mapping bss section
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(6), offset: 8f450, virtual_addr: 92450, physical_addr: 92450, file_size: 9500, mem_size: 19e10, align: 1000 })
+INFO : Mapping bss section
+INFO : Entry point at: 0x1000006ef40
+INFO : Creating GDT at PhysAddr(0x10d4000)
+INFO : Map framebuffer
+INFO : Map physical memory
+INFO : Allocate bootinfo
+INFO : Create Memory Map
+INFO : Create bootinfo
+INFO : Jumping to kernel entry point at VirtAddr(0x1000006ef40)
+[VIRTIO] init start
+[VIRTIO] not found, fallback to ATA
+[MAIN] storage init done
+[NET] init start
+[NET] VirtIO network device found
+[VIRTIO-NET] BAR0 and IRQ 11 found
+VirtIO Net Features: 0x79bf8064
+VirtIO-Net MAC: 52:54:00:12:34:56
+VirtIO Net RX size: 256, TX size: 256
+[NET] VirtIO network registered
+[NET] IP Layer starting (using static IP for test)...
+[NET] DHCP skipped, using static configuration (10.0.2.15)
+[MAIN] network init done
+[FS] init_storage start
+[FS] storage acquired, reading superblock
+[FS] superblock read OK
+[FS] format_disk start
+[FS] writing superblock
+[FS] superblock written
+[FS] ensure_default_system_files called
+[MAIN] fs init done
+[MAIN] IPC tests done
+NOVA OS
+
+KERNEL INITIALIZED
+ARCHITECTURE: X86_64
+DISPLAY: 1280X720
+MEMORY: READY (HEAP ACTIVE)
+INTERRUPTS: INITIALIZED (100 HZ PIT)
+KEYBOARD: READY
+SCHEDULER: PREEMPTIVE (ROUND-ROBIN)
+USERSPACE: READY (ELF64 + RING 0/3 + SYSCALLS)
+STORAGE: MOUNTED (PERSISTENT NOVAFS)
+
+NOVA> [MAIN] banner printed
+[TEST] Running nslookup example.com...
+[DNS] server = 10.0.2.3
+TX Used idx: 1
+TX Used idx: 2
+TX Used idx: 3
+TX Used idx: 4
+TX Used idx: 5
+RX packet len=64
+ARP IN opcode=2 src=a000203 dst=a00020f
+TX Used idx: 6
+[DNS] query sent = YES

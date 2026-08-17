@@ -96,6 +96,9 @@ pub fn do_fork(
                 FileDescriptor::File(path, offset) => {
                     child_fd_table.push(Some(FileDescriptor::File(path.clone(), *offset)));
                 }
+                FileDescriptor::Socket(id) => {
+                    child_fd_table.push(Some(FileDescriptor::Socket(*id)));
+                }
             }
         } else {
             child_fd_table.push(None);

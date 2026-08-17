@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["kernel", "bootloader", "user/hello", "user/child", "user/exec-test", "user/pipe-test", "user/mmap-test", "user/mmap-file-test", "user/shared-mmap-test", "user/signal-test"]
+members = ["kernel", "bootloader", "user/hello", "user/child", "user/exec-test", "user/pipe-test", "user/mmap-test", "user/mmap-file-test", "user/shared-mmap-test", "user/signal-test", "user/udp-test", "user/nova-net", "user/http-get"]
 
 [profile.dev]
 panic = "abort"

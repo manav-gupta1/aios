@@ -18,6 +18,14 @@ pub const SYS_SIGACTION: usize = 15;
 pub const SYS_SETPGID: usize = 16;
 pub const SYS_KILLPG: usize = 17;
 pub const SYS_TCSETPGRP: usize = 18;
+pub const SYS_SOCKET: usize = 19;
+pub const SYS_BIND: usize = 20;
+pub const SYS_SENDTO: usize = 21;
+pub const SYS_RECVFROM: usize = 22;
+pub const SYS_CONNECT: usize = 23;
+pub const SYS_SEND: usize = 24;
+pub const SYS_RECV: usize = 25;
+pub const SYS_DNS_RESOLVE: usize = 26;
 pub static LAST_SYSCALL_NUM: AtomicUsize = AtomicUsize::new(0);
 pub static LAST_SYSCALL_PID: AtomicUsize = AtomicUsize::new(0);
 pub static LAST_SYSCALL_IS_RING3: AtomicBool = AtomicBool::new(false);
@@ -171,20 +179,28 @@ pub fn syscall_dispatch(
             let ptr = arg2 as *mut u8;
             let len = arg3;
 
+            crate::drivers::storage::serial_print("SYS_READ called\n");
+
             if !crate::memory::validate_user_buffer(ptr, len) {
+                crate::drivers::storage::serial_print("SYS_READ: validate_user_buffer failed\n");
                 return u64::MAX;
             }
 
             let slice = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
-
             loop {
-                match crate::process::read_fd(pid, fd, slice) {
-                    Ok(n) => return n as u64,
+                match crate::process::read_fd(pid, fd as usize, slice) {
+                    Ok(n) => {
+                        crate::drivers::storage::serial_print("SYS_READ: read successful\n");
+                        return n as u64;
+                    }
                     Err(crate::process::PipeReadResult::WouldBlock) => {
                         x86_64::instructions::interrupts::enable();
                         x86_64::instructions::hlt();
                     }
-                    Err(_) => return u64::MAX,
+                    Err(_) => {
+                        crate::drivers::storage::serial_print("SYS_READ: read failed\n");
+                        return u64::MAX;
+                    }
                 }
             }
         }
@@ -253,18 +269,31 @@ pub fn syscall_dispatch(
             let len = arg2;
 
             if !crate::memory::validate_user_buffer(ptr, len) {
+                crate::drivers::storage::serial_print("SYS_OPEN: validate_user_buffer failed!\n");
                 return u64::MAX;
             }
 
             let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
             let path_str = match core::str::from_utf8(slice) {
                 Ok(s) => s,
-                Err(_) => return u64::MAX,
+                Err(_) => {
+                    crate::drivers::storage::serial_print("SYS_OPEN: invalid utf8!\n");
+                    return u64::MAX;
+                }
             };
+
+            crate::drivers::storage::serial_print("SYS_OPEN: trying to open ");
+            crate::drivers::storage::serial_print(path_str);
+            crate::drivers::storage::serial_print("\n");
 
             match crate::process::open_file(pid, path_str) {
                 Ok(fd) => fd as u64,
-                Err(_) => u64::MAX,
+                Err(e) => {
+                    crate::drivers::storage::serial_print("SYS_OPEN: open_file failed: ");
+                    crate::drivers::storage::serial_print(e);
+                    crate::drivers::storage::serial_print("\n");
+                    u64::MAX
+                }
             }
         }
 
@@ -311,6 +340,271 @@ pub fn syscall_dispatch(
                 Ok(_) => 0,
                 Err(_) => u64::MAX,
             }
+        }
+
+        SYS_SOCKET => {
+            let domain = arg1;
+            let type_ = arg2;
+            let protocol = arg3;
+            
+            crate::drivers::storage::serial_print(&alloc::format!("SYS_SOCKET domain={}, type={}, proto={}\n", domain, type_, protocol));
+            
+            if domain != 2 {
+                crate::drivers::storage::serial_print("SYS_SOCKET: domain != 2\n");
+                return u64::MAX;
+            }
+            
+            let sock_proto = if type_ == 2 && protocol == 0 {
+                crate::net::socket::SocketProtocol::UDP
+            } else if type_ == 1 && protocol == 6 {
+                crate::net::socket::SocketProtocol::TCP
+            } else {
+                crate::drivers::storage::serial_print("SYS_SOCKET: bad type/proto\n");
+                return u64::MAX;
+            };
+            
+            let mut table = crate::net::socket::SOCKET_TABLE.lock();
+            let sock_id = table.alloc_socket(sock_proto);
+            drop(table);
+            
+            let mut ptable = crate::process::PROCESS_TABLE.lock();
+            let proc = ptable.processes.iter_mut().find(|p| p.pid == pid);
+            if let Some(p) = proc {
+                let fd = p.alloc_fd(crate::process::FileDescriptor::Socket(sock_id));
+                crate::drivers::storage::serial_print(&alloc::format!("SYS_SOCKET: success fd={}\n", fd));
+                fd as u64
+            } else {
+                crate::net::socket::SOCKET_TABLE.lock().close_socket(sock_id);
+                crate::drivers::storage::serial_print("SYS_SOCKET: proc not found\n");
+                u64::MAX
+            }
+        }
+
+        SYS_BIND => {
+            let fd = arg1;
+            let port = arg2 as u16;
+            let ptable = crate::process::PROCESS_TABLE.lock();
+            let proc = ptable.processes.iter().find(|p| p.pid == pid);
+            if let Some(p) = proc {
+                if let Some(crate::process::FileDescriptor::Socket(sock_id)) = p.get_fd(fd) {
+                    drop(ptable);
+                    match crate::net::socket::sys_bind(sock_id, port) {
+                        Ok(_) => 0,
+                        Err(_) => u64::MAX,
+                    }
+                } else {
+                    u64::MAX
+                }
+            } else {
+                u64::MAX
+            }
+        }
+
+        SYS_SENDTO => {
+            let fd = arg1;
+            let buf_ptr = arg2 as *const u8;
+            let len = arg3;
+            let dest_ip = unsafe { *frame_ptr.add(12) } as u32; // rcx
+            let dest_port = unsafe { *frame_ptr.add(7) } as u16; // r8
+            
+            if !crate::memory::validate_user_buffer(buf_ptr, len) {
+                return u64::MAX;
+            }
+            let slice = unsafe { core::slice::from_raw_parts(buf_ptr, len) };
+            
+            let ptable = crate::process::PROCESS_TABLE.lock();
+            let proc = ptable.processes.iter().find(|p| p.pid == pid);
+            if let Some(p) = proc {
+                if let Some(crate::process::FileDescriptor::Socket(sock_id)) = p.get_fd(fd) {
+                    drop(ptable);
+                    match crate::net::socket::sys_sendto(sock_id, dest_ip, dest_port, slice) {
+                        Ok(n) => n as u64,
+                        Err(_) => u64::MAX,
+                    }
+                } else {
+                    u64::MAX
+                }
+            } else {
+                u64::MAX
+            }
+        }
+
+        SYS_RECVFROM => {
+            let fd = arg1;
+            let buf_ptr = arg2 as *mut u8;
+            let len = arg3;
+            let src_ip_ptr = unsafe { *frame_ptr.add(12) } as *mut u32; // rcx
+            let src_port_ptr = unsafe { *frame_ptr.add(7) } as *mut u16; // r8
+            
+            if !crate::memory::validate_user_buffer(buf_ptr, len) {
+                return u64::MAX;
+            }
+            if src_ip_ptr as usize != 0 && !crate::memory::validate_user_buffer(src_ip_ptr as *const u8, 4) {
+                return u64::MAX;
+            }
+            if src_port_ptr as usize != 0 && !crate::memory::validate_user_buffer(src_port_ptr as *const u8, 2) {
+                return u64::MAX;
+            }
+            let slice = unsafe { core::slice::from_raw_parts_mut(buf_ptr, len) };
+            
+            let ptable = crate::process::PROCESS_TABLE.lock();
+            let proc = ptable.processes.iter().find(|p| p.pid == pid);
+            if let Some(p) = proc {
+                if let Some(crate::process::FileDescriptor::Socket(sock_id)) = p.get_fd(fd) {
+                    let task_id = p.main_task_id;
+                    drop(ptable);
+                    
+                    loop {
+                        match crate::net::socket::sys_recvfrom(sock_id, slice, task_id) {
+                            Ok(crate::net::socket::RecvResult::Data { src_ip, src_port, len }) => {
+                                if src_ip_ptr as usize != 0 {
+                                    unsafe { *src_ip_ptr = src_ip; }
+                                }
+                                if src_port_ptr as usize != 0 {
+                                    unsafe { *src_port_ptr = src_port; }
+                                }
+                                return len as u64;
+                            }
+                            Ok(crate::net::socket::RecvResult::WouldBlock) => {
+                                crate::task::scheduler::block_current_task();
+                            }
+                            Err(_) => return u64::MAX,
+                        }
+                    }
+                } else {
+                    u64::MAX
+                }
+            } else {
+                u64::MAX
+            }
+        }
+
+        SYS_CONNECT => {
+            let fd = arg1;
+            let dest_ip = arg2 as u32;
+            let dest_port = arg3 as u16;
+            
+            let ptable = crate::process::PROCESS_TABLE.lock();
+            let proc = ptable.processes.iter().find(|p| p.pid == pid);
+            if let Some(p) = proc {
+                if let Some(crate::process::FileDescriptor::Socket(sock_id)) = p.get_fd(fd) {
+                    let task_id = p.main_task_id;
+                    drop(ptable);
+                    let start_ticks = crate::drivers::timer::TimerDriver::get_ticks();
+                    let timeout_ticks = 100; // 1 second (100 HZ PIT)
+                    let mut retries = 0;
+                    loop {
+                        match crate::net::socket::sys_connect(sock_id, dest_ip, dest_port, task_id) {
+                            Ok(()) => {
+                                return 0;
+                            },
+                            Err(_) => {
+                                if crate::drivers::timer::TimerDriver::get_ticks() - start_ticks > timeout_ticks {
+                                    return (-1i64) as u64;
+                                }
+                                if retries % 50 == 0 {
+                                    crate::net::socket::tcp_retry_syn(sock_id);
+                                }
+                                retries += 1;
+                                crate::task::scheduler::yield_current_task();
+                            }
+                        }
+                    }
+                } else {
+                    u64::MAX
+                }
+            } else {
+                u64::MAX
+            }
+        }
+        
+        SYS_SEND => {
+            let fd = arg1;
+            let buf_ptr = arg2 as *const u8;
+            let len = arg3;
+            if !crate::memory::validate_user_buffer(buf_ptr, len) {
+                return u64::MAX;
+            }
+            let slice = unsafe { core::slice::from_raw_parts(buf_ptr, len) };
+            
+            let ptable = crate::process::PROCESS_TABLE.lock();
+            let proc = ptable.processes.iter().find(|p| p.pid == pid);
+            if let Some(p) = proc {
+                if let Some(crate::process::FileDescriptor::Socket(sock_id)) = p.get_fd(fd) {
+                    drop(ptable);
+                    match crate::net::socket::sys_send(sock_id, slice) {
+                        Ok(n) => n as u64,
+                        Err(_) => u64::MAX,
+                    }
+                } else {
+                    u64::MAX
+                }
+            } else {
+                u64::MAX
+            }
+        }
+        
+        SYS_RECV => {
+            let fd = arg1;
+            let buf_ptr = arg2 as *mut u8;
+            let len = arg3;
+            if !crate::memory::validate_user_buffer(buf_ptr, len) {
+                return u64::MAX;
+            }
+            let slice = unsafe { core::slice::from_raw_parts_mut(buf_ptr, len) };
+            
+            let ptable = crate::process::PROCESS_TABLE.lock();
+            let proc = ptable.processes.iter().find(|p| p.pid == pid);
+            if let Some(p) = proc {
+                if let Some(crate::process::FileDescriptor::Socket(sock_id)) = p.get_fd(fd) {
+                    let task_id = p.main_task_id;
+                    drop(ptable);
+                    loop {
+                        match crate::net::socket::sys_recv(sock_id, slice, task_id) {
+                            Ok(crate::net::socket::RecvResult::Data { len, .. }) => return len as u64,
+                            Ok(crate::net::socket::RecvResult::WouldBlock) => {
+                                crate::task::scheduler::block_current_task();
+                            }
+                            Err(_) => return u64::MAX,
+                        }
+                    }
+                } else {
+                    u64::MAX
+                }
+            } else {
+                u64::MAX
+            }
+        }
+        
+        SYS_DNS_RESOLVE => {
+            crate::drivers::storage::serial_print("[KDNS SYSCALL]\n");
+            let ptr = arg1 as *const u8;
+            let len = arg2;
+            let out_ptr = arg3 as *mut u32;
+            
+            if !crate::memory::validate_user_buffer(ptr, len) {
+                return (-1i64) as u64;
+            }
+            if !crate::memory::validate_user_buffer(out_ptr as *const u8, 4) {
+                return (-1i64) as u64;
+            }
+            
+            let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
+            if let Ok(name) = core::str::from_utf8(slice) {
+                if let Some(ip) = crate::net::dns::resolve(name) {
+                    let ip_str = alloc::format!("{}.{}.{}.{}", (ip >> 24) & 0xFF, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF);
+                    crate::drivers::storage::serial_print("resolver result = SUCCESS\n");
+                    crate::drivers::storage::serial_print(&alloc::format!("resolved IPv4 = {}\n", ip_str));
+                    crate::drivers::storage::serial_print("before copy_to_user = OK\n");
+                    
+                    unsafe { *out_ptr = ip; }
+                    
+                    crate::drivers::storage::serial_print("after copy_to_user = OK\n");
+                    crate::drivers::storage::serial_print("final syscall return = 0\n");
+                    return 0;
+                }
+            }
+            (-1i64) as u64
         }
 
         _ => u64::MAX,

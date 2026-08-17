@@ -1,0 +1,179 @@
+INFO : Framebuffer info: FrameBufferInfo { byte_len: 2764800, width: 1280, height: 720, pixel_format: Bgr, bytes_per_pixel: 3, stride: 1280 }
+INFO : 4th Stage
+INFO : BiosInfo { stage_4: Region { start: 130000, len: 25260 }, kernel: Region { start: 1000000, len: 98eb0 }, ramdisk: Region { start: 1099000, len: 0 }, config_file: Region { start: 1099000, len: 0 }, last_used_addr: 1098fff, framebuffer: BiosFramebufferInfo { region: Region { start: fd000000, len: 2a3000 }, width: 500, height: 2d0, bytes_per_pixel: 3, stride: 500, pixel_format: Bgr }, memory_map_addr: 12140, memory_map_len: 7 }
+INFO : BIOS boot
+INFO : Elf file loaded at Pointer {
+    addr: 0x0000000001000000,
+    metadata: 626352,
+}
+INFO : virtual_address_offset: 0x10000000000
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(4), offset: 0, virtual_addr: 0, physical_addr: 0, file_size: 2a700, mem_size: 2a700, align: 1000 })
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(5), offset: 2a700, virtual_addr: 2b700, physical_addr: 2b700, file_size: 611b5, mem_size: 611b5, align: 1000 })
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(6), offset: 8b8b8, virtual_addr: 8d8b8, physical_addr: 8d8b8, file_size: 3ae8, mem_size: 4748, align: 1000 })
+INFO : Mapping bss section
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(6), offset: 8f3a0, virtual_addr: 923a0, physical_addr: 923a0, file_size: 9502, mem_size: 19e20, align: 1000 })
+INFO : Mapping bss section
+INFO : Entry point at: 0x1000007cad0
+INFO : Creating GDT at PhysAddr(0x10d3000)
+INFO : Map framebuffer
+INFO : Map physical memory
+INFO : Allocate bootinfo
+INFO : Create Memory Map
+INFO : Create bootinfo
+INFO : Jumping to kernel entry point at VirtAddr(0x1000007cad0)
+[VIRTIO] init start
+[VIRTIO] not found, fallback to ATA
+[MAIN] storage init done
+[NET] init start
+[NET] VirtIO network device found
+[VIRTIO-NET] BAR0 and IRQ 11 found
+VirtIO Net Features: 0x79bf8064
+VirtIO-Net MAC: 52:54:00:12:34:56
+VirtIO Net RX size: 256, TX size: 256
+[NET] VirtIO network registered
+[NET] IP Layer starting (using static IP for test)...
+[NET] DHCP skipped, using static configuration (10.0.2.15)
+[MAIN] network init done
+[FS] init_storage start
+[FS] storage acquired, reading superblock
+[FS] superblock read OK
+[FS] format_disk start
+[FS] writing superblock
+[FS] superblock written
+[FS] ensure_default_system_files called
+[MAIN] fs init done
+[MAIN] IPC tests done
+NOVA OS
+
+KERNEL INITIALIZED
+ARCHITECTURE: X86_64
+DISPLAY: 1280X720
+MEMORY: READY (HEAP ACTIVE)
+INTERRUPTS: INITIALIZED (100 HZ PIT)
+KEYBOARD: READY
+SCHEDULER: PREEMPTIVE (ROUND-ROBIN)
+USERSPACE: READY (ELF64 + RING 0/3 + SYSCALLS)
+STORAGE: MOUNTED (PERSISTENT NOVAFS)
+
+NOVA> [MAIN] banner printed
+nnssllooookkuupp  eexxaammppllee..ccoomm
+
+Server:    10.0.2.3
+Address:   10.0.2.3
+
+Non-authoritative answer:
+Name:      example.com
+Address:   [DNS] server = 10.0.2.3
+TX Used idx: 1
+TX Used idx: 2
+TX Used idx: 3
+TX Used idx: 4
+TX Used idx: 5
+RX packet len=64
+ARP IN opcode=2 src=a000203 dst=a00020f
+TX Used idx: 6
+[DNS] query sent = YES
+RX packet len=103
+[UDP RX] packet received
+[UDP RX] destination port
+[UDP RX] source port
+[UDP RX] delivered to socket
+[DNS] response received = YES
+[DNS] response length = 61
+[DNS] transaction ID = 1234
+[DNS] flags = 8180
+[DNS] ANCOUNT = 2
+[DNS] A record found = YES
+[DNS] IPv4 = 172.66.147.243
+[DNS] final result = SUCCESS
+172.66.147.243
+
+NOVA> ccuurrll  hhttttpp::////eexxaammppllee..ccoomm//
+
+NOVA> HTTP-GET STARTED!
+Calling sys_open...
+SYS_OPEN: trying to open /tmp_curl_url
+HTTP-GET STARTED!
+CallingCalling sys_read...
+SYS_READ called
+SYS_READ: read successful
+Returned from sys_read!
+Calling sys_close...
+Returned from sys_close!
+Parsing utf8...
+Trimming whitespace...
+Checking https...
+HTTP-GET: Starting request to: http://example.com/
+Resolving example.com...
+ sys_open...
+Calling sys_read...
+Returned from sys_read!
+Calling sys_clHTTP: DNS lookup start
+[KDNS SYSCALL]
+[DNS] server = 10.0.2.3
+TX Used idx: 7
+[DNS] query sent = YES
+ose...
+Returned from sys_close!
+ParsinRX packet len=103
+[UDP RX] packet received
+[UDP RX] destination port
+[UDP RX] source port
+[UDP RX] delivered to socket
+[DNS] response received = YES
+[DNS] response length = 61
+[DNS] transaction ID = 1234
+[DNS] flags = 8180
+[DNS] ANCOUNT = 2
+[DNS] A record found = YES
+[DNS] IPv4 = 104.20.23.154
+[DNS] final result = SUCCESS
+resolver result = SUCCESS
+resolved IPv4 = 104.20.23.154
+before copy_to_user = OK
+after copy_to_user = OK
+final syscall return = 0
+HTTP: DNS lookup return code: OK
+HTTP: resolved address OK
+Connecting to server...
+SYS_SOCKET domain=2, type=1, proto=6
+SYS_SOCKET: success fd=3
+[TCP OUT] len=20 src_port=49153 dest_port=80 seq=12345678 ack=0 flags=0x2 csum=0xe1c9
+TX Used idx: 8
+RX packet len=64
+ARP IN opcode=2 src=a000202 dst=a00020f
+g utf8...
+Trimming whitespace...
+Checking https...
+HTTP-GET: Starting request to: http://example.com/
+Resolving example.com...
+HTTP: DNS lookup start
+HTTP: DNS lookup return code: OK
+HTTP: resolved address OK
+Connecting to server...
+[TCP OUT] len=20 src_port=49153 dest_port=80 seq=12345678 ack=0 flags=0x2 csum=0xe1c9
+[TCP OUT] len=20 src_port=49153 dest_port=80 seq=12345678 ack=0 flags=0x2 csum=0xe1c9
+TX Used idx: 9
+[TCP OUT] len=20 src_port=49153 dest_poRX packet len=60
+[TCP IN] len=24 src_port=80 dest_port=49153 SYN=true ACK=true FIN=false RST=false
+[TCP OUT] len=20 src_port=49153 dest_port=80 seq=12345679 ack=832002 flags=0x10 csum=0x2fac
+TX Used idx: 10
+Sending GET request...
+[TCP OUT] len=76 src_port=49153 dest_port=80 seq=12345679 ack=832002 flags=0x18 csum=0xbd52
+TX Used idx: 11
+[SYS_SEND] state after send: Established
+Response:
+------------------------
+rt=80 seq=12345678 ack=0 flags=0x2 csum=0xe1c9
+[TCP IN] len=24 src_port=80 dest_port=49153 SYN=true ACK=true FIN=false RST=false
+[TCP OUT] len=20 src_port=49153 dest_port=80 seq=12345679 ack=832002 flags=0x10 csum=0x2fac
+Sending GET request...
+[TCP OUT] len=76 src_port=49153 dest_port=80 seq=12345679 ack=832002 flags=0x18 csum=0xbd52
+[SYS_SEND] state after send: Established
+Response:
+------------------------
+ssllaasshhbbiinnssllaasshhhheelllloo
+
+Unknown command: slashbinslashhello
+
+NOVA> 

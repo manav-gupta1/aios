@@ -1,0 +1,234 @@
+INFO : Framebuffer info: FrameBufferInfo { byte_len: 2764800, width: 1280, height: 720, pixel_format: Bgr, bytes_per_pixel: 3, stride: 1280 }
+INFO : 4th Stage
+INFO : BiosInfo { stage_4: Region { start: 130000, len: 25260 }, kernel: Region { start: 1000000, len: 99750 }, ramdisk: Region { start: 109a000, len: 0 }, config_file: Region { start: 109a000, len: 0 }, last_used_addr: 1099fff, framebuffer: BiosFramebufferInfo { region: Region { start: fd000000, len: 2a3000 }, width: 500, height: 2d0, bytes_per_pixel: 3, stride: 500, pixel_format: Bgr }, memory_map_addr: 12140, memory_map_len: 7 }
+INFO : BIOS boot
+INFO : Elf file loaded at Pointer {
+    addr: 0x0000000001000000,
+    metadata: 628560,
+}
+INFO : virtual_address_offset: 0x10000000000
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(4), offset: 0, virtual_addr: 0, physical_addr: 0, file_size: 2a8c4, mem_size: 2a8c4, align: 1000 })
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(5), offset: 2a8d0, virtual_addr: 2b8d0, physical_addr: 2b8d0, file_size: 61885, mem_size: 61885, align: 1000 })
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(6), offset: 8c158, virtual_addr: 8e158, physical_addr: 8e158, file_size: 3ae8, mem_size: 3ea8, align: 1000 })
+INFO : Mapping bss section
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(6), offset: 8fc40, virtual_addr: 92c40, physical_addr: 92c40, file_size: 9500, mem_size: 19e08, align: 1000 })
+INFO : Mapping bss section
+INFO : Entry point at: 0x10000061360
+INFO : Creating GDT at PhysAddr(0x10d3000)
+INFO : Map framebuffer
+INFO : Map physical memory
+INFO : Allocate bootinfo
+INFO : Create Memory Map
+INFO : Create bootinfo
+INFO : Jumping to kernel entry point at VirtAddr(0x10000061360)
+[VIRTIO] init start
+[VIRTIO] not found, fallback to ATA
+[MAIN] storage init done
+[NET] init start
+[NET] VirtIO network device found
+[VIRTIO-NET] BAR0 and IRQ 11 found
+VirtIO Net Features: 0x79bf8064
+VirtIO-Net MAC: 52:54:00:12:34:56
+VirtIO Net RX size: 256, TX size: 256
+[NET] VirtIO network registered
+[NET] IP Layer starting (using static IP for test)...
+[NET] DHCP skipped, using static configuration (10.0.2.15)
+[MAIN] network init done
+[FS] init_storage start
+[FS] storage acquired, reading superblock
+[FS] superblock read OK
+[FS] format_disk start
+[FS] writing superblock
+[FS] superblock written
+[FS] ensure_default_system_files called
+[MAIN] fs init done
+[MAIN] IPC tests done
+NOVA OS
+
+KERNEL INITIALIZED
+ARCHITECTURE: X86_64
+DISPLAY: 1280X720
+MEMORY: READY (HEAP ACTIVE)
+INTERRUPTS: INITIALIZED (100 HZ PIT)
+KEYBOARD: READY
+SCHEDULER: PREEMPTIVE (ROUND-ROBIN)
+USERSPACE: READY (ELF64 + RING 0/3 + SYSCALLS)
+STORAGE: MOUNTED (PERSISTENT NOVAFS)
+
+NOVA> [MAIN] banner printed
+ccuurrll  hhttttpp::////eexxaammppllee..ccoomm//
+
+NOVA> HTTP-GET STARTED!
+Calling sys_open...
+SYS_OPEN: trying to open /tmp_curl_url
+HTTP-GET STARTED!
+CalCalling sys_read...
+SYS_READ called
+SYS_READ: read successful
+Returned from sys_read!
+Calling sys_close...
+Returned from sys_close!
+Parsing utf8...
+Trimming whitespace...
+Checking https...
+HTTP-GET: Starting request to: http://example.com/
+Resolving example.com...
+ling sys_open...
+Calling sys_read...
+Returned from sys_read!
+CallinHTTP: DNS lookup start
+[KDNS SYSCALL]
+[DNS] server = 10.0.2.3
+TX Used idx: 1
+g sys_close...
+Returned from sys_close!
+Parsing utf8TX Used idx: 2
+TX Used idx: 3
+TX Used idx: 4
+TX Used idx: 5
+RX packet len=64
+ARP IN opcode=2 src=a000203 dst=a00020f
+...
+Trimming whitespace...
+Checking https...
+HTTP-GET: Starting reqTX Used idx: 6
+[DNS] query sent = YES
+uest to: http://exampleRX packet len=103
+[UDP RX] packet received
+[UDP RX] destination port
+[UDP RX] source port
+[UDP RX] delivered to socket
+.com/
+Resolving exa[DNS] response received = YES
+[DNS] response length = 61
+[DNS] transaction ID = 1234
+[DNS] flags = 8180
+[DNS] ANCOUNT = 2
+[DNS] A record found = YES
+[DNS] IPv4 = 172.66.147.243
+[DNS] final result = SUCCESS
+resolver result = SUCCESS
+resolved IPv4 = 172.66.147.243
+before copy_to_user = OK
+after copy_to_user = OK
+final syscall return = 0
+HTTP: DNS lookup return code: OK
+HTTP: resolved address OK
+Connecting to server...
+SYS_SOCKET domain=2, type=1, proto=6
+SYS_SOCKET: success fd=3
+[TCP CONNECT] start
+[TCP CONNECT] SYN sent
+[TCP OUT] len=20 src_port=49153 dest_port=80 seq=12345678 ack=0 flags=0x2 csum=0x2142
+TX Used idx: 7
+RX packet len=64
+ARP IN opcode=2 src=a000202 dst=a00020f
+mple.com...
+HTTP: DNS lookup start
+HTTP: DNS lookup return code: OK
+HTTP: resolved address OK
+Connecting to server...
+[TCP OUT] len=20 src_port=49153 dest_port=80 seq=12345678 ack=0 flags=0x2 csum=0x2142
+[TCP OUT] len=20 src_port=49153 dest_port=80 seq=12345678 ack=0 flags=0x2 csum=0x2142
+TX Used idx: 8
+[TCP OUT] len=20 src_port=491RX packet len=60
+[TCP IN] len=24 src_port=80 dest_port=49153 SYN=true ACK=true FIN=false RST=false
+[TCP RX] packet received
+[TCP RX] src=172.66.147.243:80 dst=10.0.2.15:49153
+[TCP RX] flags=0x12
+[TCP RX] SYN=true
+[TCP RX] ACK=true
+[TCP CONNECT] SYN-ACK received
+[TCP CONNECT] ACK sent
+[TCP OUT] len=20 src_port=49153 dest_port=80 seq=12345679 ack=192002 flags=0x10 csum=0x332e
+TX Used idx: 9
+[TCP CONNECT] state=ESTABLISHED
+[TCP CONNECT] waking process
+Sending GET request...
+[TCP OUT] len=76 src_port=49153 dest_port=80 seq=12345679 ack=192002 flags=0x18 csum=0xc0d4
+TX Used idx: 10
+[SYS_SEND] state after send: Established
+RX packet len=60
+[TCP IN] len=20 src_port=80 dest_port=49153 SYN=false ACK=true FIN=false RST=false
+[TCP RX] packet received
+[TCP RX] src=172.66.147.243:80 dst=10.0.2.15:49153
+[TCP RX] flags=0x10
+[TCP RX] SYN=false
+[TCP RX] ACK=true
+53 dest_port=80 seq=12345678RX packet len=921
+RX packet len=60
+[TCP IN] len=887 src_port=80 dest_port=49153 SYN=false ACK=true FIN=false RST=false
+[TCP RX] packet received
+[TCP RX] src=172.66.147.243:80 dst=10.0.2.15:49153
+[TCP RX] flags=0x18
+[TCP RX] SYN=false
+[TCP RX] ACK=true
+[TCP OUT] len=20 src_port=49153 dest_port=80 seq=12345735 ack=192869 flags=0x10 csum=0x2f93
+TX Used idx: 11
+[TCP IN] len=20 src_port=80 dest_port=49153 SYN=false ACK=true FIN=true RST=false
+[TCP RX] packet received
+[TCP RX] src=172.66.147.243:80 dst=10.0.2.15:49153
+[TCP RX] flags=0x11
+[TCP RX] SYN=false
+[TCP RX] ACK=true
+[TCP OUT] len=20 src_port=49153 dest_port=80 seq=12345735 ack=192870 flags=0x10 csum=0x2f92
+TX Used idx: 12
+Response:
+------------------------
+HTTP/1.1 200 OK
+Date: Mon, 17 Aug 2026  ack=0 flags=0x2 csum=0x2142
+[TCP IN] len=24 src_port=80 dest_port=49153 S04:53:38 GMT
+Content-Type: text/html
+Transfer-Encoding: chunked
+Connection: close
+Server: cloudflare
+Last-Modified: Wed, 12 Aug 2026 20:15:57 GMT
+Allow: GET, HEAD
+Accept-Ranges: bytes
+Age: 14YN=true ACK=true FIN=false RST=false
+[TCP OUT] len=20 src_port=491532
+cf-cache-status: HIT
+CF-RAY: a2c61384cc98a827-DEL
+
+22f
+<!doctype html><html lang="en"><head><title>Example Domain</title><link rel="icon" href="data:,"><meta name="viewport" conte dest_port=80 seq=12345679 ack=192002 flags=0x10 csum=0x332e
+nt="width=device-width, initial-scale=1"><style>body{background:#eee;width:60vw;margin:15vh auto;font-family:system-ui,sans-serif}h1{font-size:1.5em}div{opacity:0.8}a:link,a:visited{color:#348}</style></head><body><div><h1>Example Domain</h1><p>This domain is for use in documentation examples without needing permission. Avoid use in operations.</p><p><a href="https://iana.org/domains/example">Learn more</a></p></div></body></html>
+
+0
+
+[SYS_RECV] Returning EOF because state is CloseWait
+
+------------------------
+Sending GET request...
+[TCP OUT] len=76 src_port=49153 dest_port=80 seq=12345679 ack=192002 flags=0x18 csum=0xc0d4
+[SYS_SEND] state after send: Established
+[TCP IN] len=20 src_port=80 dest_port=49153 SYN=false ACK=true FIN=false RST=false
+[TCP IN] len=887 src_port=80 dest_port=49153 SYN=false ACK=true FIN=f04:53:38 GMT
+Content-Type: text/html
+Transfer-Encoding: chunked
+Connect2
+cf-cache-status: HIT
+CF-RAY: a2c61384cc98a827-DEL
+
+22f
+<!doctnt="width=device-width, initial-scale=1"><style>body{backgrouRX packet len=921
+[TCP IN] len=887 src_port=80 dest_port=49153 SYN=false ACK=true FIN=true RST=false
+[TCP RX] packet received
+[TCP RX] src=172.66.147.243:80 dst=10.0.2.15:49153
+[TCP RX] flags=0x19
+[TCP RX] SYN=false
+[TCP RX] ACK=true
+[TCP IN] len=887 src_port=80 dest_port=49153 SYN=false ACK=true FIN=true RST=false
+RX packet len=921
+[TCP IN] len=887 src_port=80 dest_port=49153 SYN=false ACK=true FIN=true RST=false
+[TCP RX] packet received
+[TCP RX] src=172.66.147.243:80 dst=10.0.2.15:49153
+[TCP RX] flags=0x19
+[TCP RX] SYN=false
+[TCP RX] ACK=true
+[TCP IN] len=887 src_port=80 dest_port=49153 SYN=false ACK=true FIN=true RST=false
+ssllaasshhbbiinnssllaasshhhheelllloo
+
+Unknown command: slashbinslashhello
+
+NOVA> 

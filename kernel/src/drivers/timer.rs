@@ -1,3 +1,4 @@
+use core::sync::atomic::{AtomicUsize, Ordering};
 use x86_64::instructions::port::Port;
 
 const PIT_CHANNEL_0_DATA: u16 = 0x40;
@@ -5,6 +6,8 @@ const PIT_COMMAND_PORT: u16 = 0x43;
 const PIT_BASE_FREQUENCY: u32 = 1_193_182;
 
 pub const TIMER_FREQUENCY_HZ: u32 = 100;
+
+pub static SYSTEM_TICKS: AtomicUsize = AtomicUsize::new(0);
 
 pub struct TimerDriver;
 
@@ -26,6 +29,12 @@ impl TimerDriver {
     }
 
     pub fn tick(current_rsp: usize) -> usize {
+        SYSTEM_TICKS.fetch_add(1, Ordering::Relaxed);
         crate::task::scheduler::tick(current_rsp)
     }
+    
+    pub fn get_ticks() -> usize {
+        SYSTEM_TICKS.load(Ordering::Relaxed)
+    }
 }
+

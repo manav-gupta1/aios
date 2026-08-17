@@ -1,0 +1,184 @@
+INFO : Framebuffer info: FrameBufferInfo { byte_len: 2764800, width: 1280, height: 720, pixel_format: Bgr, bytes_per_pixel: 3, stride: 1280 }
+INFO : 4th Stage
+INFO : BiosInfo { stage_4: Region { start: 130000, len: 25260 }, kernel: Region { start: 1000000, len: 8cf58 }, ramdisk: Region { start: 108d000, len: 0 }, config_file: Region { start: 108d000, len: 0 }, last_used_addr: 108cfff, framebuffer: BiosFramebufferInfo { region: Region { start: fd000000, len: 2a3000 }, width: 500, height: 2d0, bytes_per_pixel: 3, stride: 500, pixel_format: Bgr }, memory_map_addr: 12140, memory_map_len: 7 }
+INFO : BIOS boot
+INFO : Elf file loaded at Pointer {
+    addr: 0x0000000001000000,
+    metadata: 577368,
+}
+INFO : virtual_address_offset: 0x10000000000
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(4), offset: 0, virtual_addr: 0, physical_addr: 0, file_size: 205fc, mem_size: 205fc, align: 1000 })
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(5), offset: 20600, virtual_addr: 21600, physical_addr: 21600, file_size: 5f535, mem_size: 5f535, align: 1000 })
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(6), offset: 7fb38, virtual_addr: 81b38, physical_addr: 81b38, file_size: 3918, mem_size: 44c8, align: 1000 })
+INFO : Mapping bss section
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(6), offset: 83450, virtual_addr: 86450, physical_addr: 86450, file_size: 94f8, mem_size: 19e08, align: 1000 })
+INFO : Mapping bss section
+INFO : Entry point at: 0x100000498d0
+INFO : Creating GDT at PhysAddr(0x10c7000)
+INFO : Map framebuffer
+INFO : Map physical memory
+INFO : Allocate bootinfo
+INFO : Create Memory Map
+INFO : Create bootinfo
+INFO : Jumping to kernel entry point at VirtAddr(0x100000498d0)
+[VIRTIO] init start
+[VIRTIO] not found, fallback to ATA
+[MAIN] storage init done
+[NET] init start
+[NET] VirtIO network device found
+[VIRTIO-NET] BAR0 and IRQ 11 found
+VirtIO Net Features: 0x79bf8064
+VirtIO-Net MAC: 52:54:00:12:34:56
+VirtIO Net RX size: 256, TX size: 256
+[NET] VirtIO network registered
+[NET] IP Layer starting (using static IP for test)...
+[NET] DHCP skipped, using static configuration (10.0.2.15)
+[MAIN] network init done
+[FS] init_storage start
+[FS] storage acquired, reading superblock
+[FS] superblock read OK
+[FS] format_disk start
+[FS] writing superblock
+[FS] superblock written
+[FS] ensure_default_system_files called
+[MAIN] fs init done
+[MAIN] IPC tests done
+NOVA OS
+
+KERNEL INITIALIZED
+ARCHITECTURE: X86_64
+DISPLAY: 1280X720
+MEMORY: READY (HEAP ACTIVE)
+INTERRUPTS: INITIALIZED (100 HZ PIT)
+KEYBOARD: READY
+SCHEDULER: PREEMPTIVE (ROUND-ROBIN)
+USERSPACE: READY (ELF64 + RING 0/3 + SYSCALLS)
+STORAGE: MOUNTED (PERSISTENT NOVAFS)
+
+NOVA> [MAIN] banner printed
+[TEST] Running HTTP-GET...
+[TEST] Wrote /tmp_curl_url
+HTTP-GET STARTED!
+[TEST] Spawned http-get
+HTTP-GET STARTED!
+Calling sys_open...
+SYS_OPEN: trying to open /tmp_curl_url
+Calling sys_open...
+Calling sys_read...
+SYS_READ called
+SYS_READ: read successful
+Returned from sys_read!
+Calling sys_close...
+Calling sys_read...
+Returned from sys_read!
+CaReturned from sys_close!
+Parsing utf8...
+Trimming whitespace...
+Checking https...
+HTTP-GET: Starting request to: lling sys_close...
+Returned from sys_close!
+Parsinghttp://www.example.com/
+Resolving www.example.com...
+TX Used idx: 1
+ utf8...
+TrimmiTX Used idx: 2
+TX Used idx: 3
+TX Used idx: 4
+TX Used idx: 5
+RX packet len=64
+ARP IN opcode=2 src=a000203 dst=a00020f
+ng whitespace...
+Checking https...
+HTTP-GET: Starting requeTX Used idx: 6
+DNS request sent
+RX packet len=107
+st to: http://www.example.com/
+Resolving www.example.com...
+Connecting to server...
+SYS_SOCKET domain=2, type=1, proto=6
+SYS_SOCKET: success fd=3
+Connecting to server...
+[TCP OUT] len=20 src_port=49153 dest_port=80 seq=12345678 ack=0 flags=0x2 csum=0xe1c9
+TX Used idx: 7
+RX packet len=64
+ARP IN opcode=2 src=a000202 dst=a00020f
+[TCP OUT] len=20 src_port=49153 dest_port=80 seq=12345678 ack=0 flags=0x2 csum=0xe1c9
+[TCP OUT] len=20 src_port=49153 dest_port=80 seq=12345678 ack=0 flags=0x2 csum=0xe1c9
+TX Used idx: 8
+RX packet len=60
+[TCP IN] len=24 src_port=80 dest_port=49153 SYN=true ACK=true FIN=false RST=false
+[TCP OUT] len=20 src_port=49153 dest_port=80 seq=12345679 ack=192002 flags=0x10 csum=0xf3b5
+TX Used idx: 9
+[TCP OUT] lSending GET request...
+[TCP OUT] len=80 src_port=49153 dest_port=80 seq=12345679 ack=192002 flags=0x18 csum=0x92b2
+TX Used idx: 10
+[SYS_SEND] state after send: Established
+RX packet len=60
+[TCP IN] len=20 src_port=80 dest_port=49153 SYN=false ACK=true FIN=false RST=false
+en=20 src_poResponse:
+------------------------
+RX packet len=922
+RX packet len=60
+[TCP IN] len=888 src_port=80 dest_port=49153 SYN=false ACK=true FIN=false RST=false
+[TCP OUT] len=20 src_port=49153 dest_port=80 seq=12345739 ack=192870 flags=0x10 csum=0xf015
+TX Used idx: 11
+[TCP IN] len=20 src_port=80 dest_port=49153 SYN=false ACK=true FIN=true RST=false
+[TCP OUT] len=20 src_port=49153 dest_port=80 seq=12345739 ack=192871 flags=0x10 csum=0xf014
+TX Used idx: 12
+rt=49153 dest_port=80 seq=12345678 ack=0 flags=0x2 csum=0xe1c9
+[TCP IN] len=24 src_port=80 dest_port=49153 SYN=true ACK=true FIN=false RST=false
+[TCP OUT] len=20 src_port=49153 dest_port=80 seqHTTP/1.1 20=12345679 ack=192002 flags=0x10 csum=0xf3b5
+Sending GET reque0 OK
+Datest...
+[TCP OUT] len=80 src_port=49153 dest_port=80 seq=1234567: Sun, 16 9 ack=192002 flags=0x18 csum=0x92b2
+[SYS_SEND] state aAug 2026 20:fter send: Established
+[TCP IN] len=20 src_por32:58 GMT
+t=80 dest_port=49153 SYN=false ACK=true FIN=false RST=false
+Content-Type: text/html
+Transfer-Encoding: chunked
+Connection: close
+Server: cloudflare
+Last-Modified: Wed, 12 Aug 2026 20:17:18 GMT
+Allow: GET, HEAD
+Accept-Ranges: bytes
+Age: 7965
+cf-cache-status: HIT
+CF-RAY: a2c3361aa81ea713-DEL
+
+22f
+<!doctype html><html lang="en"><head><title>Example Domain</titleResponse:
+------------------><link rel=------
+HTTP/1.1 200 OK
+Date: Sun, 16 Aug 2026 20:32:5"icon" href=8 GMT
+Content-Type: text/html
+Transfer-Encoding: chunked
+Conne"data:,"><ction: close
+Server: cloudflare
+Last-Modified: Wed, 12meta name=" Aug 2026 20:17:18 GMT
+Allow: GET, HEAD
+Accept-Ranges: bytes
+Ageviewport" : 7965
+cf-cache-status: HIT
+CF-RAY: a2c3361aa81ea713-DEL
+
+22f
+<!doctypcontent="we html><html lang="en"><head><title>Example Domain</title><lidth=devicink rel="icon" href="data:,"><meta name="viewport" content="width=device-width, e-width, initial-scalinitial-scale=1"><stye=1"><style>body{ble>body{background:#ackground:#eee;width:6eee;width:60vw;margin:0vw;margin:15vh auto15vh auto;font-fa;font-family:systemily:system-ui,sansm-ui,sans-serif}h1{f-serif}h1{font-sizeont-size:1.5em}:1.5em}div{opacitdiv{opacity:0.8}a:liy:0.8}a:link,a:visink,a:visited{color:ted{color:#348}</s#348}</style></hetyle></head><body><dad><body><div><h1>Exaiv><h1>Example Domaimple Domain</h1><p>n</h1><p>This RX packet len=922
+[TCP IN] len=888 src_port=80 dest_port=49153 SYN=false ACK=true FIN=true RST=false
+This [TCP IN] len=888 src_port=80 dest_port=49153 SYN=false ACK=true FIN=true RST=false
+domain is domain is for use infor use in document documentation exaation examples withmples without needinout needing permissig permission. Avoid uon. Avoid use in opese in operations.<rations.</p><p><a hr/p><p><a href="https:ef="https://iana.or//iana.org/domaing/domains/example">s/example">Learn moreLearn more</a></p></d</a></p></div></bodyiv></body></html>
+
+></html>
+
+0
+
+[SYS_RECV] Returning EOF because state is CloseWait
+
+------------------------
+0
+
+[SYS_RECV] Returning EOF because state is CloseWait
+
+------------------------
+RX packet len=922
+[TCP IN] len=888 src_port=80 dest_port=49153 SYN=false ACK=true FIN=true RST=false
+[TCP IN] len=888 src_port=80 dest_port=49153 SYN=false ACK=true FIN=true RST=false

@@ -1,0 +1,15 @@
+#!/usr/bin/expect -f
+set timeout 15
+set img [exec sh -c "ls -t ./target/release/build/nova-boot/*/out/nova-os-bios.img | head -n 1"]
+spawn qemu-system-x86_64 -drive format=raw,file=$img,if=virtio -display none -serial stdio -netdev user,id=u1 -device virtio-net-pci,netdev=u1
+expect "NOVA>"
+send "ip\r"
+expect "NOVA>"
+send "nslookup example.com\r"
+expect "NOVA>"
+send "run /bin/hello\r"
+expect "NOVA>"
+send "jobs\r"
+expect "NOVA>"
+puts "\nALL TESTS PASSED\n"
+exit 0

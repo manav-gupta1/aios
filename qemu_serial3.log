@@ -1,0 +1,69 @@
+INFO : Framebuffer info: FrameBufferInfo { byte_len: 2764800, width: 1280, height: 720, pixel_format: Bgr, bytes_per_pixel: 3, stride: 1280 }
+INFO : 4th Stage
+INFO : BiosInfo { stage_4: Region { start: 130000, len: 25260 }, kernel: Region { start: 1000000, len: 96328 }, ramdisk: Region { start: 1097000, len: 0 }, config_file: Region { start: 1097000, len: 0 }, last_used_addr: 1096fff, framebuffer: BiosFramebufferInfo { region: Region { start: fd000000, len: 2a3000 }, width: 500, height: 2d0, bytes_per_pixel: 3, stride: 500, pixel_format: Bgr }, memory_map_addr: 12140, memory_map_len: 7 }
+INFO : BIOS boot
+INFO : Elf file loaded at Pointer {
+    addr: 0x0000000001000000,
+    metadata: 615208,
+}
+INFO : virtual_address_offset: 0x10000000000
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(4), offset: 0, virtual_addr: 0, physical_addr: 0, file_size: 299ac, mem_size: 299ac, align: 1000 })
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(5), offset: 299b0, virtual_addr: 2a9b0, physical_addr: 2a9b0, file_size: 5f555, mem_size: 5f555, align: 1000 })
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(6), offset: 88f08, virtual_addr: 8af08, physical_addr: 8af08, file_size: 3918, mem_size: 40f8, align: 1000 })
+INFO : Mapping bss section
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(6), offset: 8c820, virtual_addr: 8f820, physical_addr: 8f820, file_size: 94f8, mem_size: 19e08, align: 1000 })
+INFO : Mapping bss section
+INFO : Entry point at: 0x10000052f10
+INFO : Creating GDT at PhysAddr(0x10d1000)
+INFO : Map framebuffer
+INFO : Map physical memory
+INFO : Allocate bootinfo
+INFO : Create Memory Map
+INFO : Create bootinfo
+INFO : Jumping to kernel entry point at VirtAddr(0x10000052f10)
+[VIRTIO] init start
+[VIRTIO] not found, fallback to ATA
+[MAIN] storage init done
+[NET] init start
+[NET] VirtIO network device found
+[VIRTIO-NET] BAR0 and IRQ 11 found
+VirtIO Net Features: 0x79bf8064
+VirtIO-Net MAC: 52:54:00:12:34:56
+VirtIO Net RX size: 256, TX size: 256
+[NET] VirtIO network registered
+[NET] IP Layer starting (using static IP for test)...
+[NET] DHCP skipped, using static configuration (10.0.2.15)
+[MAIN] network init done
+[FS] init_storage start
+[FS] storage acquired, reading superblock
+[FS] superblock read OK
+[FS] format_disk start
+[FS] writing superblock
+[FS] superblock written
+[FS] ensure_default_system_files called
+[MAIN] fs init done
+[MAIN] IPC tests done
+NOVA OS
+
+KERNEL INITIALIZED
+ARCHITECTURE: X86_64
+DISPLAY: 1280X720
+MEMORY: READY (HEAP ACTIVE)
+INTERRUPTS: INITIALIZED (100 HZ PIT)
+KEYBOARD: READY
+SCHEDULER: PREEMPTIVE (ROUND-ROBIN)
+USERSPACE: READY (ELF64 + RING 0/3 + SYSCALLS)
+STORAGE: MOUNTED (PERSISTENT NOVAFS)
+
+NOVA> [MAIN] banner printed
+[TEST] Running HTTP-GET...
+[TEST] Wrote /tmp_curl_url
+[TEST] Spawned http-get
+HTTP-GET STARTED!
+
+[Fault] User process Page Fault at RIP: 0x0, Addr: 0x0
+
+[Fault] User process error: Page Fault (terminating task)
+HTTP-GET STARTED!
+
+[Fault] User process error: Page Fault (terminating task)

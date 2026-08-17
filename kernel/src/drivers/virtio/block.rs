@@ -2,52 +2,7 @@ use core::sync::atomic::{compiler_fence, Ordering};
 use x86_64::instructions::port::Port;
 use crate::drivers::storage::BlockDevice;
 
-const REG_DEVICE_FEATURES: u16 = 0x00;
-const REG_GUEST_FEATURES: u16 = 0x04;
-const REG_QUEUE_ADDRESS: u16 = 0x08;
-const REG_QUEUE_SIZE: u16 = 0x0C;
-const REG_QUEUE_SELECT: u16 = 0x0E;
-const REG_QUEUE_NOTIFY: u16 = 0x10;
-const REG_DEVICE_STATUS: u16 = 0x12;
-const REG_ISR_STATUS: u16 = 0x13;
-const REG_CONFIG: u16 = 0x14;
-
-const STATUS_ACKNOWLEDGE: u8 = 1;
-const STATUS_DRIVER: u8 = 2;
-const STATUS_DRIVER_OK: u8 = 4;
-const STATUS_FEATURES_OK: u8 = 8;
-const STATUS_FAILED: u8 = 128;
-
-const VIRTQ_DESC_F_NEXT: u16 = 1;
-const VIRTQ_DESC_F_WRITE: u16 = 2;
-
-#[repr(C, align(16))]
-struct VirtqDesc {
-    addr: u64,
-    len: u32,
-    flags: u16,
-    next: u16,
-}
-
-#[repr(C)]
-struct VirtqAvail {
-    flags: u16,
-    idx: u16,
-    ring: [u16; 256],
-}
-
-#[repr(C)]
-struct VirtqUsedElem {
-    id: u32,
-    len: u32,
-}
-
-#[repr(C, align(4096))]
-struct VirtqUsed {
-    flags: u16,
-    idx: u16,
-    ring: [VirtqUsedElem; 256],
-}
+use crate::drivers::virtio::virtq::*;
 
 #[repr(C)]
 pub struct BlkReqHeader {
@@ -68,11 +23,11 @@ pub struct VirtioBlock {
     desc_table: *mut VirtqDesc,
     avail_ring: *mut VirtqAvail,
     used_ring: *mut VirtqUsed,
-    
     last_used_idx: u16,
     avail_idx: u16,
     dma_header: *mut BlkReqHeader,
     dma_status: *mut u8,
+    dma_buf: *mut u8,
 }
 
 static WAKER_PID: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
@@ -96,7 +51,7 @@ unsafe impl Send for VirtioBlock {}
 unsafe impl Sync for VirtioBlock {}
 
 impl VirtioBlock {
-    pub fn new(bus: u8, device: u8, function: u8, text: &mut crate::graphics::text::TextWriter) -> Result<Self, &'static str> {
+    pub fn new(bus: u8, device: u8, function: u8, _text: &mut crate::graphics::text::TextWriter) -> Result<Self, &'static str> {
         use crate::drivers::pci::config::*;
         
         let vendor = read_config_word(bus, device, function, 0x00);
@@ -149,9 +104,9 @@ impl VirtioBlock {
         let avail_ring = (virt_addr + 4096) as *mut VirtqAvail;
         let used_ring = (virt_addr + 8192) as *mut VirtqUsed;
         
-        // We have free space between avail (ends at 4096+518=4614) and used (starts at 8192).
         let dma_header = (virt_addr + 5000) as *mut BlkReqHeader;
         let dma_status = (virt_addr + 5100) as *mut u8;
+        let dma_buf = (virt_addr + 5200) as *mut u8;
         
         // Zero out the memory
         unsafe {
@@ -192,108 +147,165 @@ impl VirtioBlock {
             avail_idx: 0,
             dma_header,
             dma_status,
+            dma_buf,
         })
     }
 
 
     fn wait_for_completion(&mut self) {
-        let pid = crate::process::current_pid();
-        WAKER_PID.store(pid, Ordering::SeqCst);
         let used = unsafe { &*self.used_ring };
         loop {
             compiler_fence(Ordering::SeqCst);
             let current = unsafe { core::ptr::read_volatile(&used.idx) };
             if current != self.last_used_idx {
                 self.last_used_idx = self.last_used_idx.wrapping_add(1);
-                WAKER_PID.store(0, Ordering::SeqCst);
                 break;
             }
-            crate::task::scheduler::block_current_task();
+            core::hint::spin_loop();
         }
     }
 }
 
 impl BlockDevice for spin::Mutex<VirtioBlock> {
-    fn read_sector(&self, lba: u32, buf: &mut [u8]) -> Result<(), ()> {
+    fn read_sector(&self, mut lba: u32, buf: &mut [u8]) -> Result<(), ()> {
         let mut blk = self.lock();
-        if buf.len() != 512 { return Err(()); }
+        let mut offset = 0;
         
-        unsafe {
-            (*blk.dma_header).type_ = VIRTIO_BLK_T_IN;
-            (*blk.dma_header).ioprio = 0;
-            (*blk.dma_header).sector = lba as u64;
-            *blk.dma_status = 255;
+        while offset < buf.len() {
+            let chunk_size = core::cmp::min(buf.len() - offset, 512);
+            
+            unsafe {
+                (*blk.dma_header).type_ = VIRTIO_BLK_T_IN;
+                (*blk.dma_header).ioprio = 0;
+                (*blk.dma_header).sector = lba as u64;
+                *blk.dma_status = 255;
+            }
+            
+            let phys_offset = crate::memory::get_phys_offset().unwrap();
+            let header_phys = (blk.dma_header as u64) - phys_offset;
+            let dma_buf_phys = (blk.dma_buf as u64) - phys_offset;
+            let status_phys = (blk.dma_status as u64) - phys_offset;
+            
+            let desc = unsafe { core::slice::from_raw_parts_mut(blk.desc_table, 3) };
+            desc[0] = VirtqDesc { addr: header_phys, len: 16, flags: VIRTQ_DESC_F_NEXT, next: 1 };
+            desc[1] = VirtqDesc { addr: dma_buf_phys, len: 512, flags: VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE, next: 2 };
+            desc[2] = VirtqDesc { addr: status_phys, len: 1, flags: VIRTQ_DESC_F_WRITE, next: 0 };
+            
+            let head_idx = 0;
+            let avail_idx = blk.avail_idx % blk.queue_size;
+            unsafe {
+                let avail = &mut *blk.avail_ring;
+                avail.ring[avail_idx as usize] = head_idx;
+                compiler_fence(Ordering::SeqCst);
+                blk.avail_idx = blk.avail_idx.wrapping_add(1);
+                core::ptr::write_volatile(&mut avail.idx, blk.avail_idx);
+                compiler_fence(Ordering::SeqCst);
+            }
+            
+            unsafe { Port::<u16>::new(blk.io_base + REG_QUEUE_NOTIFY).write(0) };
+            blk.wait_for_completion();
+            
+            let status = unsafe { core::ptr::read_volatile(blk.dma_status) };
+            if status != 0 { return Err(()); }
+            
+            unsafe {
+                core::ptr::copy_nonoverlapping(blk.dma_buf, buf.as_mut_ptr().add(offset), chunk_size);
+            }
+            
+            lba += 1;
+            offset += chunk_size;
         }
         
-        // Convert to physical addresses
-        let phys_offset = crate::memory::get_phys_offset().unwrap();
-        let header_phys = (blk.dma_header as u64) - phys_offset;
-        let buf_phys = (buf.as_ptr() as u64) - phys_offset;
-        let status_phys = (blk.dma_status as u64) - phys_offset;
-        
-        let desc = unsafe { core::slice::from_raw_parts_mut(blk.desc_table, 3) };
-        desc[0] = VirtqDesc { addr: header_phys, len: 16, flags: VIRTQ_DESC_F_NEXT, next: 1 };
-        desc[1] = VirtqDesc { addr: buf_phys, len: 512, flags: VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE, next: 2 };
-        desc[2] = VirtqDesc { addr: status_phys, len: 1, flags: VIRTQ_DESC_F_WRITE, next: 0 };
-        
-        let head_idx = 0;
-        let avail_idx = blk.avail_idx % blk.queue_size;
-        unsafe {
-            let avail = &mut *blk.avail_ring;
-            avail.ring[avail_idx as usize] = head_idx;
-            compiler_fence(Ordering::SeqCst);
-            blk.avail_idx = blk.avail_idx.wrapping_add(1);
-            core::ptr::write_volatile(&mut avail.idx, blk.avail_idx);
-            compiler_fence(Ordering::SeqCst);
-        }
-        
-        unsafe { Port::<u16>::new(blk.io_base + REG_QUEUE_NOTIFY).write(0) };
-        
-        blk.wait_for_completion();
-        
-        let status = unsafe { core::ptr::read_volatile(blk.dma_status) };
-        if status == 0 { Ok(()) } else { Err(()) }
+        Ok(())
     }
 
-    fn write_sector(&self, lba: u32, buf: &[u8]) -> Result<(), ()> {
+    fn write_sector(&self, mut lba: u32, buf: &[u8]) -> Result<(), ()> {
         let mut blk = self.lock();
-        if buf.len() != 512 { return Err(()); }
+        let mut offset = 0;
         
-        unsafe {
-            (*blk.dma_header).type_ = VIRTIO_BLK_T_OUT;
-            (*blk.dma_header).ioprio = 0;
-            (*blk.dma_header).sector = lba as u64;
-            *blk.dma_status = 255;
+        while offset < buf.len() {
+            let chunk_size = core::cmp::min(buf.len() - offset, 512);
+            
+            // If partial sector write, read the sector first to avoid corrupting unrelated data
+            if chunk_size < 512 {
+                unsafe {
+                    (*blk.dma_header).type_ = VIRTIO_BLK_T_IN;
+                    (*blk.dma_header).ioprio = 0;
+                    (*blk.dma_header).sector = lba as u64;
+                    *blk.dma_status = 255;
+                }
+                
+                let phys_offset = crate::memory::get_phys_offset().unwrap();
+                let header_phys = (blk.dma_header as u64) - phys_offset;
+                let dma_buf_phys = (blk.dma_buf as u64) - phys_offset;
+                let status_phys = (blk.dma_status as u64) - phys_offset;
+                
+                let desc = unsafe { core::slice::from_raw_parts_mut(blk.desc_table, 3) };
+                desc[0] = VirtqDesc { addr: header_phys, len: 16, flags: VIRTQ_DESC_F_NEXT, next: 1 };
+                desc[1] = VirtqDesc { addr: dma_buf_phys, len: 512, flags: VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE, next: 2 };
+                desc[2] = VirtqDesc { addr: status_phys, len: 1, flags: VIRTQ_DESC_F_WRITE, next: 0 };
+                
+                let head_idx = 0;
+                let avail_idx = blk.avail_idx % blk.queue_size;
+                unsafe {
+                    let avail = &mut *blk.avail_ring;
+                    avail.ring[avail_idx as usize] = head_idx;
+                    compiler_fence(Ordering::SeqCst);
+                    blk.avail_idx = blk.avail_idx.wrapping_add(1);
+                    core::ptr::write_volatile(&mut avail.idx, blk.avail_idx);
+                    compiler_fence(Ordering::SeqCst);
+                }
+                
+                unsafe { Port::<u16>::new(blk.io_base + REG_QUEUE_NOTIFY).write(0) };
+                blk.wait_for_completion();
+                
+                let status = unsafe { core::ptr::read_volatile(blk.dma_status) };
+                if status != 0 { return Err(()); }
+            }
+            
+            unsafe {
+                core::ptr::copy_nonoverlapping(buf.as_ptr().add(offset), blk.dma_buf, chunk_size);
+            }
+            
+            unsafe {
+                (*blk.dma_header).type_ = VIRTIO_BLK_T_OUT;
+                (*blk.dma_header).ioprio = 0;
+                (*blk.dma_header).sector = lba as u64;
+                *blk.dma_status = 255;
+            }
+            
+            let phys_offset = crate::memory::get_phys_offset().unwrap();
+            let header_phys = (blk.dma_header as u64) - phys_offset;
+            let dma_buf_phys = (blk.dma_buf as u64) - phys_offset;
+            let status_phys = (blk.dma_status as u64) - phys_offset;
+            
+            let desc = unsafe { core::slice::from_raw_parts_mut(blk.desc_table, 3) };
+            desc[0] = VirtqDesc { addr: header_phys, len: 16, flags: VIRTQ_DESC_F_NEXT, next: 1 };
+            desc[1] = VirtqDesc { addr: dma_buf_phys, len: 512, flags: VIRTQ_DESC_F_NEXT, next: 2 };
+            desc[2] = VirtqDesc { addr: status_phys, len: 1, flags: VIRTQ_DESC_F_WRITE, next: 0 };
+            
+            let head_idx = 0;
+            let avail_idx = blk.avail_idx % blk.queue_size;
+            unsafe {
+                let avail = &mut *blk.avail_ring;
+                avail.ring[avail_idx as usize] = head_idx;
+                compiler_fence(Ordering::SeqCst);
+                blk.avail_idx = blk.avail_idx.wrapping_add(1);
+                core::ptr::write_volatile(&mut avail.idx, blk.avail_idx);
+                compiler_fence(Ordering::SeqCst);
+            }
+            
+            unsafe { Port::<u16>::new(blk.io_base + REG_QUEUE_NOTIFY).write(0) };
+            blk.wait_for_completion();
+            
+            let status = unsafe { core::ptr::read_volatile(blk.dma_status) };
+            if status != 0 { return Err(()); }
+            
+            lba += 1;
+            offset += chunk_size;
         }
         
-        // Convert to physical addresses
-        let phys_offset = crate::memory::get_phys_offset().unwrap();
-        let header_phys = (blk.dma_header as u64) - phys_offset;
-        let buf_phys = (buf.as_ptr() as u64) - phys_offset;
-        let status_phys = (blk.dma_status as u64) - phys_offset;
-        
-        let desc = unsafe { core::slice::from_raw_parts_mut(blk.desc_table, 3) };
-        desc[0] = VirtqDesc { addr: header_phys, len: 16, flags: VIRTQ_DESC_F_NEXT, next: 1 };
-        desc[1] = VirtqDesc { addr: buf_phys, len: 512, flags: VIRTQ_DESC_F_NEXT, next: 2 };
-        desc[2] = VirtqDesc { addr: status_phys, len: 1, flags: VIRTQ_DESC_F_WRITE, next: 0 };
-        
-        let head_idx = 0;
-        let avail_idx = blk.avail_idx % blk.queue_size;
-        unsafe {
-            let avail = &mut *blk.avail_ring;
-            avail.ring[avail_idx as usize] = head_idx;
-            compiler_fence(Ordering::SeqCst);
-            blk.avail_idx = blk.avail_idx.wrapping_add(1);
-            core::ptr::write_volatile(&mut avail.idx, blk.avail_idx);
-            compiler_fence(Ordering::SeqCst);
-        }
-        
-        unsafe { Port::<u16>::new(blk.io_base + REG_QUEUE_NOTIFY).write(0) };
-        
-        blk.wait_for_completion();
-        
-        let status = unsafe { core::ptr::read_volatile(blk.dma_status) };
-        if status == 0 { Ok(()) } else { Err(()) }
+        Ok(())
     }
 
     fn sector_size(&self) -> usize {

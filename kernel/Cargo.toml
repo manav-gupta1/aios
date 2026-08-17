@@ -9,3 +9,6 @@ x86_64 = "0.15.5"
 spin = "0.9.8"
 pic8259 = "0.11.0"
 pc-keyboard = "0.7.0"
+
+[build-dependencies]
+http-get = { path = "../user/http-get", artifact = "bin", target = "x86_64-unknown-none" }

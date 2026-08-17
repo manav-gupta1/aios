@@ -267,6 +267,12 @@ pub fn translate_page(page: Page<Size4KiB>) -> Option<PhysFrame> {
     Some(PhysFrame::containing_address(phys_addr))
 }
 
+pub fn virt_to_phys(virt_addr: VirtAddr) -> Option<x86_64::PhysAddr> {
+    let phys_offset = (*PHYS_OFFSET.lock())?;
+    let mapper = unsafe { init_page_table(phys_offset) };
+    mapper.translate_addr(virt_addr)
+}
+
 pub fn resolve_cow_page(page: Page<Size4KiB>) -> Result<(), &'static str> {
     let phys_offset = match *PHYS_OFFSET.lock() {
         Some(offset) => offset,

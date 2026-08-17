@@ -35,6 +35,7 @@ pub enum FileDescriptor {
     PipeRead(Arc<Mutex<Pipe>>),
     PipeWrite(Arc<Mutex<Pipe>>),
     File(String, usize), // path, current offset
+    Socket(usize),       // socket id in global SOCKET_TABLE
 }
 
 #[derive(Clone)]

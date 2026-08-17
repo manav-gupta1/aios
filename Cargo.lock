@@ -152,6 +152,13 @@ name = "hello"
 version = "0.1.0"
 
 [[package]]
+name = "http-get"
+version = "0.1.0"
+dependencies = [
+ "nova-net",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -162,6 +169,7 @@ name = "kernel"
 version = "0.1.0"
 dependencies = [
  "bootloader_api",
+ "http-get",
  "pc-keyboard",
  "pic8259",
  "spin",
@@ -235,6 +243,10 @@ dependencies = [
  "bootloader",
  "kernel",
 ]
+
+[[package]]
+name = "nova-net"
+version = "0.1.0"
 
 [[package]]
 name = "once_cell"
@@ -445,6 +457,10 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "udp-test"
+version = "0.1.0"
 
 [[package]]
 name = "unicode-ident"

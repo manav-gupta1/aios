@@ -245,3 +245,8 @@ pub fn block_current_task() {
     }
     x86_64::instructions::interrupts::enable();
 }
+
+pub fn yield_current_task() {
+    x86_64::instructions::interrupts::enable_and_hlt();
+    x86_64::instructions::interrupts::disable();
+}

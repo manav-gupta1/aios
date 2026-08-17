@@ -1,0 +1,101 @@
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /Users/manav/Projects/nova-os/user/hello/Cargo.toml
+workspace: /Users/manav/Projects/nova-os/Cargo.toml
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /Users/manav/Projects/nova-os/user/mmap-test/Cargo.toml
+workspace: /Users/manav/Projects/nova-os/Cargo.toml
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /Users/manav/Projects/nova-os/user/mmap-file-test/Cargo.toml
+workspace: /Users/manav/Projects/nova-os/Cargo.toml
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /Users/manav/Projects/nova-os/user/shared-mmap-test/Cargo.toml
+workspace: /Users/manav/Projects/nova-os/Cargo.toml
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /Users/manav/Projects/nova-os/user/http-get/Cargo.toml
+workspace: /Users/manav/Projects/nova-os/Cargo.toml
+   Compiling kernel v0.1.0 (/Users/manav/Projects/nova-os/kernel)
+warning: variable does not need to be mutable
+   --> kernel/src/net/tcp.rs:165:9
+    |
+165 |     let mut table = crate::net::socket::SOCKET_TABLE.lock();
+    |         ----^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: static `CHAR_BUFFER` is never used
+  --> kernel/src/console/mod.rs:44:8
+   |
+44 | static CHAR_BUFFER: Mutex<CharBuffer> = Mutex::new(CharBuffer::new());
+   |        ^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `irq` is never read
+  --> kernel/src/drivers/virtio/block.rs:19:5
+   |
+17 | pub struct VirtioBlock {
+   |            ----------- field in this struct
+18 |     io_base: u16,
+19 |     irq: u8,
+   |     ^^^
+
+warning: constant `REG_MAC` is never used
+ --> kernel/src/drivers/virtio/net.rs:8:7
+  |
+8 | const REG_MAC: u16 = 0;
+  |       ^^^^^^^
+
+warning: fields `irq` and `rx_buffers` are never read
+  --> kernel/src/drivers/virtio/net.rs:12:5
+   |
+10 | pub struct VirtioNet {
+   |            --------- fields in this struct
+11 |     io_base: u16,
+12 |     irq: u8,
+   |     ^^^
+...
+20 |     rx_buffers: *mut u8,
+   |     ^^^^^^^^^^
+
+warning: function `allocate_frame` is never used
+  --> kernel/src/memory/mod.rs:80:8
+   |
+80 | pub fn allocate_frame() -> Option<PhysFrame> {
+   |        ^^^^^^^^^^^^^^
+
+warning: function `virt_to_phys` is never used
+   --> kernel/src/memory/mod.rs:270:8
+    |
+270 | pub fn virt_to_phys(virt_addr: VirtAddr) -> Option<x86_64::PhysAddr> {
+    |        ^^^^^^^^^^^^
+
+warning: field `next_id` is never read
+  --> kernel/src/net/socket.rs:24:5
+   |
+22 | pub struct SocketTable {
+   |            ----------- field in this struct
+23 |     pub sockets: Vec<Option<Socket>>,
+24 |     next_id: usize,
+   |     ^^^^^^^
+
+warning: constant `ETHERTYPE_IPv4` should have an upper case name
+ --> kernel/src/net/ethernet.rs:3:11
+  |
+3 | pub const ETHERTYPE_IPv4: u16 = 0x0800;
+  |           ^^^^^^^^^^^^^^ help: convert the identifier to upper case (notice the capitalization): `ETHERTYPE_IPV4`
+  |
+  = note: `#[warn(non_upper_case_globals)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: constant in pattern `ETHERTYPE_IPv4` should have an upper case name
+  --> kernel/src/net/ethernet.rs:28:9
+   |
+28 |         ETHERTYPE_IPv4 => {
+   |         ^^^^^^^^^^^^^^ help: convert the identifier to upper case (notice the capitalization): `ETHERTYPE_IPV4`
+
+warning: `kernel` (bin "kernel") generated 10 warnings (run `cargo fix --bin "kernel" -p kernel` to apply 1 suggestion)
+   Compiling nova-boot v0.1.0 (/Users/manav/Projects/nova-os/bootloader)
+    Finished `release` profile [optimized] target(s) in 8.47s
+     Running `target/release/nova-boot`
+NOVA boot image builder

@@ -136,6 +136,18 @@ impl Shell {
             self.cmd_lspci(text);
         } else if command.eq_ignore_ascii_case("schedtest") {
             self.cmd_schedtest(text);
+        } else if command.eq_ignore_ascii_case("ifconfig") {
+            self.cmd_ifconfig(text);
+        } else if command.eq_ignore_ascii_case("netstat") {
+            self.cmd_netstat(text);
+        } else if command.eq_ignore_ascii_case("ip") {
+            self.cmd_ip(text);
+        } else if command.eq_ignore_ascii_case("nslookup") {
+            self.cmd_nslookup(args, text);
+        } else if command.eq_ignore_ascii_case("ping") {
+            self.cmd_ping(args, text);
+        } else if command.eq_ignore_ascii_case("curl") {
+            self.cmd_curl(args, text);
         } else {
             self.cmd_unknown(command, text);
         }
@@ -172,7 +184,8 @@ impl Shell {
         text.write_str("  jobs       - List active background and stopped jobs\n");
         text.write_str("  fg <id>    - Bring job to foreground\n");
         text.write_str("  bg <id>    - Resume job in background\n");
-        text.write_str("  schedtest  - Run preemptive scheduler verification test\n\n");
+        text.write_str("  schedtest  - Run preemptive scheduler verification test\n");
+        text.write_str("  curl <url> - Fetch an HTTP URL\n\n");
     }
 
     fn cmd_version(&self, text: &mut TextWriter) {
@@ -272,21 +285,25 @@ impl Shell {
             clean_args
         };
 
-        // Read executable bytes from filesystem
-        let fs = FILESYSTEM.lock();
-        let file_bytes = match fs.read_file_bytes(resolved_path) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                drop(fs);
-                self.print_error(e, resolved_path, text);
-                return;
+        let elf_data: alloc::vec::Vec<u8> = if resolved_path == "/bin/http-get" {
+            alloc::vec::Vec::from(crate::elf::ELF_HTTP_GET_BIN)
+        } else if resolved_path == "/bin/udp-test" {
+            alloc::vec::Vec::from(crate::elf::ELF_UDP_TEST_BIN)
+        } else {
+            let fs = FILESYSTEM.lock();
+            match fs.read_file_bytes(resolved_path) {
+                Ok(bytes) => {
+                    let mut vec = alloc::vec::Vec::with_capacity(bytes.len());
+                    vec.extend_from_slice(bytes);
+                    vec
+                }
+                Err(e) => {
+                    drop(fs);
+                    self.print_error(e, resolved_path, text);
+                    return;
+                }
             }
         };
-
-        let mut elf_buf = [0u8; crate::fs::MAX_FILE_SIZE];
-        let file_len = file_bytes.len();
-        elf_buf[..file_len].copy_from_slice(file_bytes);
-        drop(fs);
 
         crate::syscall::USER_OUTPUT_RECEIVED.store(false, Ordering::Relaxed);
         crate::syscall::LAST_SYSCALL_IS_RING3.store(false, Ordering::Relaxed);
@@ -297,7 +314,7 @@ impl Shell {
             alloc::string::String::from(prog_name).into_boxed_str(),
         );
 
-        match crate::elf::load_and_spawn_elf(1, leak_name, &elf_buf[..file_len]) {
+        match crate::elf::load_and_spawn_elf(1, leak_name, &elf_data) {
             Ok(child_pid) => {
                 // Assign new process group
                 let _ = crate::process::sys_setpgid(1, child_pid, child_pid);
@@ -1030,6 +1047,227 @@ impl Shell {
             }
         }
         text.write_str("\n\n");
+    }
+
+    fn cmd_ifconfig(&self, text: &mut TextWriter) {
+        let mut net = crate::drivers::network::NETWORK_DEVICE.lock();
+        if let Some(dev) = net.as_mut() {
+            text.write_str("eth0\n");
+            
+            let mac = dev.mac_address();
+            let mac_str = alloc::format!("  MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+            text.write_str(&mac_str);
+            
+            if dev.is_up() {
+                text.write_str("  STATUS: UP\n");
+            } else {
+                text.write_str("  STATUS: DOWN\n");
+            }
+        } else {
+            text.write_str("No network interfaces found.\n");
+        }
+    }
+
+    fn cmd_netstat(&self, text: &mut TextWriter) {
+        let net = crate::drivers::network::NETWORK_DEVICE.lock();
+        if let Some(dev) = net.as_ref() {
+            let stats = alloc::format!("RX packets: {}\nTX packets: {}\nRX bytes: {}\nTX bytes: {}\n\n",
+                dev.rx_packets(), dev.tx_packets(), dev.rx_bytes(), dev.tx_bytes());
+            text.write_str(&stats);
+        } else {
+            text.write_str("No network interfaces found.\n");
+            return;
+        }
+        
+        text.write_str("Active Sockets:\n");
+        text.write_str("PROTO  LOCAL_PORT  STATE\n");
+        // We need a helper to read the sockets since we can't iterate the private array directly
+        // Let's add a snapshot function to socket.rs. Wait, for now we can just add a public `snapshot` method.
+        let sockets = crate::net::socket::SOCKET_TABLE.lock().snapshots();
+        for (proto, local_port) in sockets {
+            let s = alloc::format!("{:<6} {:<11} OPEN\n", proto, local_port);
+            text.write_str(&s);
+        }
+        text.write_str("\n");
+    }
+
+    fn cmd_ip(&self, text: &mut TextWriter) {
+        let net = crate::drivers::network::NETWORK_DEVICE.lock();
+        if let Some(dev) = net.as_ref() {
+            text.write_str("eth0\n");
+            let mac = dev.mac_address();
+            let mac_str = alloc::format!("MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+            text.write_str(&mac_str);
+            
+            use core::sync::atomic::Ordering;
+            let ip = crate::net::LOCAL_IP.load(Ordering::Relaxed);
+            let netmask = crate::net::NETMASK.load(Ordering::Relaxed);
+            let gateway = crate::net::GATEWAY.load(Ordering::Relaxed);
+            let dns = crate::net::DNS_SERVER.load(Ordering::Relaxed);
+            
+            let ip_str = alloc::format!("IP: {}.{}.{}.{}\n",
+                (ip >> 24) & 0xFF, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF);
+            text.write_str(&ip_str);
+            
+            let nm_str = alloc::format!("NETMASK: {}.{}.{}.{}\n",
+                (netmask >> 24) & 0xFF, (netmask >> 16) & 0xFF, (netmask >> 8) & 0xFF, netmask & 0xFF);
+            text.write_str(&nm_str);
+            
+            let gw_str = alloc::format!("GATEWAY: {}.{}.{}.{}\n",
+                (gateway >> 24) & 0xFF, (gateway >> 16) & 0xFF, (gateway >> 8) & 0xFF, gateway & 0xFF);
+            text.write_str(&gw_str);
+            
+            let dns_str = alloc::format!("DNS: {}.{}.{}.{}\n",
+                (dns >> 24) & 0xFF, (dns >> 16) & 0xFF, (dns >> 8) & 0xFF, dns & 0xFF);
+            text.write_str(&dns_str);
+            
+        } else {
+            text.write_str("No network interfaces found.\n");
+        }
+    }
+
+    fn cmd_nslookup(&self, args: &str, text: &mut TextWriter) {
+        let domain = args.trim();
+        if domain.is_empty() {
+            text.write_str("Usage: nslookup <domain>\n");
+            return;
+        }
+
+        text.write_str("Server:    ");
+        let dns = crate::net::DNS_SERVER.load(core::sync::atomic::Ordering::Relaxed);
+        let dns_str = alloc::format!("{}.{}.{}.{}\n",
+            (dns >> 24) & 0xFF, (dns >> 16) & 0xFF, (dns >> 8) & 0xFF, dns & 0xFF);
+        text.write_str(&dns_str);
+        
+        text.write_str("Address:   ");
+        text.write_str(&dns_str);
+        
+        text.write_str("\nNon-authoritative answer:\nName:      ");
+        text.write_str(domain);
+        text.write_str("\nAddress:   ");
+        
+        match crate::net::dns::resolve(domain) {
+            Some(ip) => {
+                let ip_str = alloc::format!("{}.{}.{}.{}\n\n",
+                    (ip >> 24) & 0xFF, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF);
+                text.write_str(&ip_str);
+            }
+            None => {
+                text.write_str("NXDOMAIN or timeout\n\n");
+            }
+        }
+    }
+
+    fn cmd_ping(&mut self, args: &str, text: &mut TextWriter) {
+        let args = args.trim();
+        if args.is_empty() {
+            text.write_str("Usage: ping <ip>\n");
+            return;
+        }
+        
+        let parts: Vec<&str> = args.split('.').collect();
+        if parts.len() != 4 {
+            text.write_str("Invalid IP format.\n");
+            return;
+        }
+        
+        let mut ip_bytes = [0u8; 4];
+        for i in 0..4 {
+            if let Ok(b) = parts[i].parse::<u8>() {
+                ip_bytes[i] = b;
+            } else {
+                text.write_str("Invalid IP format.\n");
+                return;
+            }
+        }
+        
+        let dest_ip = crate::net::ip(ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
+        
+        text.write_str("Pinging ");
+        text.write_str(args);
+        text.write_str("...\n");
+        
+        // Ensure network device exists
+        if crate::drivers::network::NETWORK_DEVICE.lock().is_none() {
+            text.write_str("Network unreachable.\n");
+            return;
+        }
+        
+        // Reset ping reply
+        crate::net::icmp::LAST_PING_REPLY.store(0, core::sync::atomic::Ordering::Relaxed);
+        
+        let mut ping_sent = false;
+        for _ in 0..10 {
+            match crate::net::icmp::send_icmp_echo_request(dest_ip, 1, 1, b"ping") {
+                Ok(_) => {
+                    ping_sent = true;
+                    break;
+                }
+                Err(_) => {} // ARP resolving
+            }
+            
+            for _ in 0..1000 {
+                x86_64::instructions::hlt();
+                if crate::net::icmp::LAST_PING_REPLY.load(core::sync::atomic::Ordering::Relaxed) != 0 { break; }
+            }
+        }
+        
+        if !ping_sent {
+            text.write_str("Destination Host Unreachable (ARP failed).\n");
+            return;
+        }
+        
+        // Wait for reply
+        let mut received = false;
+        for _ in 0..100 {
+            if crate::net::icmp::LAST_PING_REPLY.load(core::sync::atomic::Ordering::Relaxed) == dest_ip {
+                received = true;
+                break;
+            }
+            x86_64::instructions::hlt();
+        }
+        
+        if received {
+            let ip_str = alloc::format!("64 bytes from {}.{}.{}.{}: icmp_seq=1\n",
+                (dest_ip >> 24) & 0xFF, (dest_ip >> 16) & 0xFF, (dest_ip >> 8) & 0xFF, dest_ip & 0xFF);
+            text.write_str(&ip_str);
+        } else {
+            text.write_str("Request timeout.\n");
+        }
+    }
+
+    fn cmd_curl(&mut self, args: &str, text: &mut TextWriter) {
+        if args.is_empty() {
+            text.set_color(240, 80, 80);
+            text.write_str("Usage: curl <url> (e.g. curl http://example.com/)\n\n");
+            return;
+        }
+
+        let mut fs = crate::fs::FILESYSTEM.lock();
+        // Delete previous file if exists to prevent leftover bytes
+        let _ = fs.remove_file("/tmp_curl_url");
+        
+        let mut url_vec = alloc::vec::Vec::from(args.as_bytes());
+        url_vec.push(0); // null terminate for http-get parser
+        
+        if let Err(_e) = fs.write_file("/tmp_curl_url", &url_vec) {
+            // ignore error
+        }
+        drop(fs);
+
+        let elf_data = alloc::vec::Vec::from(crate::elf::ELF_HTTP_GET_BIN);
+        let leak_name: &'static str = "http-get";
+        match crate::elf::load_and_spawn_elf(1, leak_name, &elf_data) {
+            Ok(_pid) => {
+                // Task spawned successfully
+            }
+            Err(_) => {
+                text.set_color(240, 80, 80);
+                text.write_str("Failed to spawn http-get\n\n");
+            }
+        }
     }
 }
 

@@ -1,3 +1,4 @@
+#![allow(warnings)]
 #![no_std]
 #![no_main]
 
@@ -116,7 +117,7 @@ pub extern "C" fn _start() -> ! {
         match nova_net::sys_dns_resolve(host) {
             Some(ip) => {
                 nova_net::print("HTTP: DNS lookup return code: OK\n");
-                let mut buf = [0u8; 32];
+
                 // Simple IP print
                 // not strictly necessary, we can just say "resolved"
                 nova_net::print("HTTP: resolved address OK\n");

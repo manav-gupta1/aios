@@ -269,26 +269,43 @@ impl Shell {
             args.trim()
         };
 
+        let (cmd_path, run_args) = if let Some(idx) = clean_args.find(' ') {
+            (&clean_args[..idx], clean_args[idx + 1..].trim())
+        } else {
+            (clean_args, "")
+        };
+
+        let mut fs = FILESYSTEM.lock();
+        let _ = fs.remove_file("/tmp_run_args");
+        if !run_args.is_empty() {
+            let mut arg_vec = alloc::vec::Vec::from(run_args.as_bytes());
+            arg_vec.push(0); // null terminate
+            let _ = fs.write_file("/tmp_run_args", &arg_vec);
+        }
+        drop(fs);
+
         // Resolve path: if relative like "hello", check "/bin/hello"
-        let resolved_path: &str = if !clean_args.starts_with('/') {
+        let resolved_path: &str = if !cmd_path.starts_with('/') {
             let mut bin_path = alloc::string::String::from("/bin/");
-            bin_path.push_str(clean_args);
+            bin_path.push_str(cmd_path);
             let fs = FILESYSTEM.lock();
             if fs.resolve_path(&bin_path).is_ok() {
                 drop(fs);
                 alloc::boxed::Box::leak(bin_path.into_boxed_str())
             } else {
                 drop(fs);
-                clean_args
+                cmd_path
             }
         } else {
-            clean_args
+            cmd_path
         };
 
         let elf_data: alloc::vec::Vec<u8> = if resolved_path == "/bin/http-get" {
             alloc::vec::Vec::from(crate::elf::ELF_HTTP_GET_BIN)
         } else if resolved_path == "/bin/udp-test" {
             alloc::vec::Vec::from(crate::elf::ELF_UDP_TEST_BIN)
+        } else if resolved_path == "/bin/ping" {
+            alloc::vec::Vec::from(crate::elf::ELF_PING_BIN)
         } else {
             let fs = FILESYSTEM.lock();
             match fs.read_file_bytes(resolved_path) {
@@ -1195,47 +1212,58 @@ impl Shell {
             return;
         }
         
-        // Reset ping reply
-        crate::net::icmp::LAST_PING_REPLY.store(0, core::sync::atomic::Ordering::Relaxed);
+        // Clear any old replies in the socket queue
+        while crate::net::smoltcp::smoltcp_ping_recv(0x1234).is_some() {}
         
-        let mut ping_sent = false;
-        for _ in 0..10 {
-            match crate::net::icmp::send_icmp_echo_request(dest_ip, 1, 1, b"ping") {
-                Ok(_) => {
-                    ping_sent = true;
-                    break;
+        // We will send 4 pings sequentially
+        let mut seq_no = 1;
+        
+        while seq_no <= 4 {
+            let mut ping_sent = false;
+            // Try sending the request
+            for _ in 0..10 {
+                match crate::net::smoltcp::smoltcp_ping_send(dest_ip, 0x1234, seq_no, b"ping") {
+                    Ok(_) => {
+                        ping_sent = true;
+                        break;
+                    }
+                    Err(_) => {
+                        crate::task::scheduler::yield_current_task();
+                    }
                 }
-                Err(_) => {} // ARP resolving
             }
             
-            for _ in 0..1000 {
-                x86_64::instructions::hlt();
-                if crate::net::icmp::LAST_PING_REPLY.load(core::sync::atomic::Ordering::Relaxed) != 0 { break; }
-            }
-        }
-        
-        if !ping_sent {
-            text.write_str("Destination Host Unreachable (ARP failed).\n");
-            return;
-        }
-        
-        // Wait for reply
-        let mut received = false;
-        for _ in 0..100 {
-            if crate::net::icmp::LAST_PING_REPLY.load(core::sync::atomic::Ordering::Relaxed) == dest_ip {
-                received = true;
+            if !ping_sent {
+                text.write_str("Destination Host Unreachable (ARP failed or buffer full).\n");
                 break;
             }
-            x86_64::instructions::hlt();
+            
+            // Wait for reply
+            let mut received = false;
+            for _ in 0..100 { // Wait up to 1 second if each yield is ~10ms
+                crate::net::smoltcp::poll_smoltcp();
+                if matches!(crate::net::smoltcp::smoltcp_ping_recv(0x1234), Some((src_ip, ident, rx_seq)) if src_ip == dest_ip && ident == 0x1234 && rx_seq == seq_no) {
+                    received = true;
+                    break;
+                }
+                crate::task::scheduler::yield_current_task();
+            }
+            
+            if received {
+                let ip_str = alloc::format!("64 bytes from {}.{}.{}.{}: icmp_seq={}\n",
+                    (dest_ip >> 24) & 0xFF, (dest_ip >> 16) & 0xFF, (dest_ip >> 8) & 0xFF, dest_ip & 0xFF, seq_no);
+                text.write_str(&ip_str);
+            } else {
+                text.write_str("Request timeout.\n");
+            }
+            
+            // Wait a bit before next ping
+            for _ in 0..50 {
+                crate::task::scheduler::yield_current_task();
+            }
+            seq_no += 1;
         }
-        
-        if received {
-            let ip_str = alloc::format!("64 bytes from {}.{}.{}.{}: icmp_seq=1\n",
-                (dest_ip >> 24) & 0xFF, (dest_ip >> 16) & 0xFF, (dest_ip >> 8) & 0xFF, dest_ip & 0xFF);
-            text.write_str(&ip_str);
-        } else {
-            text.write_str("Request timeout.\n");
-        }
+
     }
 
     fn cmd_curl(&mut self, args: &str, text: &mut TextWriter) {
@@ -1253,15 +1281,54 @@ impl Shell {
         url_vec.push(0); // null terminate for http-get parser
         
         if let Err(_e) = fs.write_file("/tmp_curl_url", &url_vec) {
-            // ignore error
+            text.set_color(240, 80, 80);
+            text.write_str("curl: failed to write /tmp_curl_url\n\n");
+            return;
         }
         drop(fs);
 
+        crate::drivers::storage::serial_print("CURL: launching http-get\n");
         let elf_data = alloc::vec::Vec::from(crate::elf::ELF_HTTP_GET_BIN);
         let leak_name: &'static str = "http-get";
         match crate::elf::load_and_spawn_elf(1, leak_name, &elf_data) {
-            Ok(_pid) => {
-                // Task spawned successfully
+            Ok(child_pid) => {
+                // Assign process group and take foreground — same as cmd_run
+                let _ = crate::process::sys_setpgid(1, child_pid, child_pid);
+                let _ = crate::process::sys_tcsetpgrp(1, child_pid);
+
+                // Wait for http-get to finish, forwarding output.
+                // Use sti+hlt instead of spin_loop so we yield to the scheduler
+                // each iteration — critical for network tasks that block on IRQ delivery.
+                for _ in 0..10_000 {
+                    while let Some(c) = crate::console::read_out_char() {
+                        text.write_char(c);
+                    }
+
+                    let state = crate::process::get_process_snapshots()
+                        .iter()
+                        .find(|p| p.pid == child_pid)
+                        .map(|p| p.state);
+
+                    let is_finished = state == Some(crate::process::ProcessState::Zombie)
+                        || state.is_none();
+
+                    if is_finished {
+                        break;
+                    }
+
+                    // Yield: enable interrupts, halt until next interrupt, then continue.
+                    // This allows IRQ11 (VirtIO net) and IRQ0 (timer/scheduler) to fire
+                    // so http-get can make progress on DNS/TCP.
+                    x86_64::instructions::interrupts::enable_and_hlt();
+                }
+
+                let _ = crate::process::sys_tcsetpgrp(1, 1);
+
+                // Flush remaining output
+                while let Some(c) = crate::console::read_out_char() {
+                    text.write_char(c);
+                }
+                text.write_str("\n");
             }
             Err(_) => {
                 text.set_color(240, 80, 80);

@@ -1,184 +1,74 @@
+#![allow(warnings)]
 #![no_std]
 #![no_main]
 
-use core::arch::asm;
 use core::panic::PanicInfo;
-
-#[inline(always)]
-fn sys_write(msg: &str) -> isize {
-    let ret: isize;
-    unsafe {
-        asm!(
-            "int 0x80",
-            in("rax") 1usize,
-            in("rdi") msg.as_ptr() as usize,
-            in("rsi") msg.len(),
-            in("rdx") 0usize,
-            lateout("rax") ret,
-            options(nostack)
-        );
-    }
-    ret
-}
-
-#[inline(always)]
-fn sys_exit(code: i32) -> ! {
-    unsafe {
-        asm!(
-            "int 0x80",
-            in("rax") 2usize,
-            in("rdi") code as usize,
-            in("rsi") 0usize,
-            in("rdx") 0usize,
-            options(noreturn)
-        );
-    }
-}
-
-#[inline(always)]
-fn sys_socket(domain: usize, type_: usize, protocol: usize) -> isize {
-    let ret: isize;
-    unsafe {
-        asm!(
-            "int 0x80",
-            in("rax") 19usize,
-            in("rdi") domain,
-            in("rsi") type_,
-            in("rdx") protocol,
-            lateout("rax") ret,
-            options(nostack)
-        );
-    }
-    ret
-}
-
-#[inline(always)]
-fn sys_bind(fd: usize, port: u16) -> isize {
-    let ret: isize;
-    unsafe {
-        asm!(
-            "int 0x80",
-            in("rax") 20usize,
-            in("rdi") fd,
-            in("rsi") port as usize,
-            in("rdx") 0usize,
-            lateout("rax") ret,
-            options(nostack)
-        );
-    }
-    ret
-}
-
-#[inline(always)]
-fn sys_sendto(fd: usize, buf: &[u8], dest_ip: u32, dest_port: u16) -> isize {
-    let ret: isize;
-    unsafe {
-        asm!(
-            "int 0x80",
-            in("rax") 21usize,
-            in("rdi") fd,
-            in("rsi") buf.as_ptr() as usize,
-            in("rdx") buf.len(),
-            in("rcx") dest_ip as usize,
-            in("r8") dest_port as usize,
-            lateout("rax") ret,
-            options(nostack)
-        );
-    }
-    ret
-}
-
-#[inline(always)]
-fn sys_recvfrom(fd: usize, buf: &mut [u8], src_ip: &mut u32, src_port: &mut u16) -> isize {
-    let ret: isize;
-    unsafe {
-        asm!(
-            "int 0x80",
-            in("rax") 22usize,
-            in("rdi") fd,
-            in("rsi") buf.as_mut_ptr() as usize,
-            in("rdx") buf.len(),
-            in("rcx") src_ip as *mut u32 as usize,
-            in("r8") src_port as *mut u16 as usize,
-            lateout("rax") ret,
-            options(nostack)
-        );
-    }
-    ret
-}
-
-#[inline(always)]
-fn sys_close(fd: usize) -> isize {
-    let ret: isize;
-    unsafe {
-        asm!(
-            "int 0x80",
-            in("rax") 9usize,
-            in("rdi") fd,
-            in("rsi") 0usize,
-            in("rdx") 0usize,
-            lateout("rax") ret,
-            options(nostack)
-        );
-    }
-    ret
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() -> ! {
-    sys_write("UDP Test starting...\n");
-    
-    // AF_INET = 2, SOCK_DGRAM = 2, IPPROTO_UDP = 0
-    let fd = sys_socket(2, 2, 0);
-    if fd < 0 {
-        sys_write("Failed to create socket\n");
-        sys_exit(1);
-    }
-    
-    // Bind to local port 8080
-    if sys_bind(fd as usize, 8080) < 0 {
-        sys_write("Failed to bind socket\n");
-        sys_exit(1);
-    }
-    sys_write("Socket bound to port 8080\n");
-    
-    let ip = u32::from_be_bytes([10, 0, 2, 2]);
-    
-    let msg = b"Hello from UDP test!\n";
-    let sent = sys_sendto(fd as usize, msg, ip, 1234);
-    if sent < 0 {
-        sys_write("Failed to sendto\n");
-        sys_exit(1);
-    }
-    sys_write("Sent UDP packet\n");
-    
-    let mut buf = [0u8; 128];
-    let mut src_ip = 0u32;
-    let mut src_port = 0u16;
-    
-    sys_write("Waiting for reply...\n");
-    let recv = sys_recvfrom(fd as usize, &mut buf, &mut src_ip, &mut src_port);
-    if recv < 0 {
-        sys_write("Failed to recvfrom\n");
-        sys_exit(1);
-    }
-    
-    sys_write("Received UDP packet: ");
-    
-    let recv_len = recv as usize;
-    if let Ok(s) = core::str::from_utf8(&buf[..recv_len]) {
-        sys_write(s);
-        sys_write("\n");
-    } else {
-        sys_write("<binary data>\n");
-    }
-    
-    sys_close(fd as usize);
-    sys_write("UDP Test finished successfully.\n");
-    sys_exit(0);
-}
+use nova_net;
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    sys_exit(1);
+    nova_net::print("udp-test panic!\n");
+    nova_net::sys_exit(1);
+}
+
+#[no_mangle]
+pub extern "C" fn _start() -> ! {
+    nova_net::print("UDP-TEST STARTED!\n");
+
+    let sock_res = nova_net::sys_socket(2, 2, 17); // AF_INET, SOCK_DGRAM, IPPROTO_UDP
+    if sock_res < 0 {
+        nova_net::print("Failed to create UDP socket\n");
+        nova_net::sys_exit(1);
+    }
+    let sock = sock_res as usize;
+
+    if nova_net::sys_bind(sock, 12345) < 0 {
+        nova_net::print("Failed to bind UDP socket\n");
+        nova_net::sys_close(sock);
+        nova_net::sys_exit(1);
+    }
+    
+    // DNS request payload for example.com
+    let dns_query: [u8; 29] = [
+        0x12, 0x34, // Transaction ID
+        0x01, 0x00, // Flags (Standard query)
+        0x00, 0x01, // Questions: 1
+        0x00, 0x00, // Answer RRs: 0
+        0x00, 0x00, // Authority RRs: 0
+        0x00, 0x00, // Additional RRs: 0
+        // Queries
+        0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e',
+        0x03, b'c', b'o', b'm',
+        0x00, // Name (example.com)
+        0x00, 0x01, // Type: A
+        0x00, 0x01, // Class: IN
+    ];
+
+    // QEMU DNS is at 10.0.2.3 (167772675 in decimal), port 53
+    let dest_ip: u32 = (10 << 24) | (0 << 16) | (2 << 8) | 3;
+    let dest_port: u16 = 53;
+
+    nova_net::print("Sending UDP DNS query...\n");
+    if nova_net::sys_sendto(sock, dest_ip, dest_port, &dns_query) < 0 {
+        nova_net::print("Failed to send UDP packet\n");
+        nova_net::sys_close(sock);
+        nova_net::sys_exit(1);
+    }
+
+    nova_net::print("Waiting for UDP response...\n");
+    let mut buf = [0u8; 512];
+    let mut src_ip: u32 = 0;
+    let mut src_port: u16 = 0;
+
+    let recv_res = nova_net::sys_recvfrom(sock, &mut buf, &mut src_ip, &mut src_port);
+    if recv_res < 0 {
+        nova_net::print("Failed to receive UDP packet (timeout?)\n");
+        nova_net::sys_close(sock);
+        nova_net::sys_exit(1);
+    }
+
+    nova_net::print("UDP TEST: PASS\n");
+    
+    nova_net::sys_close(sock);
+    nova_net::sys_exit(0);
 }

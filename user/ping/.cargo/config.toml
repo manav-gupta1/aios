@@ -1,0 +1,5 @@
+[build]
+rustflags = [
+    "-C", "link-arg=-Tuser/http-get/linker.ld",
+    "-C", "relocation-model=static",
+]

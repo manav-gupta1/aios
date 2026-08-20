@@ -26,6 +26,7 @@ pub const SYS_CONNECT: usize = 23;
 pub const SYS_SEND: usize = 24;
 pub const SYS_RECV: usize = 25;
 pub const SYS_DNS_RESOLVE: usize = 26;
+pub const SYS_PING: usize = 27;
 pub static LAST_SYSCALL_NUM: AtomicUsize = AtomicUsize::new(0);
 pub static LAST_SYSCALL_PID: AtomicUsize = AtomicUsize::new(0);
 pub static LAST_SYSCALL_IS_RING3: AtomicBool = AtomicBool::new(false);
@@ -229,8 +230,12 @@ pub fn syscall_dispatch(
 
         SYS_CLOSE => {
             let fd = arg1;
+            // Let the process table handle closing the FD
             match crate::process::close_fd(pid, fd) {
-                Ok(()) => 0,
+                Ok(()) => {
+                    crate::net::smoltcp::poll_smoltcp();
+                    0
+                },
                 Err(_) => u64::MAX,
             }
         }
@@ -454,6 +459,9 @@ pub fn syscall_dispatch(
                     let task_id = p.main_task_id;
                     drop(ptable);
                     
+                    let start_ticks = crate::drivers::timer::TimerDriver::get_ticks();
+                    let timeout_ticks = 500; // 5 seconds
+                    
                     loop {
                         match crate::net::socket::sys_recvfrom(sock_id, slice, task_id) {
                             Ok(crate::net::socket::RecvResult::Data { src_ip, src_port, len }) => {
@@ -466,7 +474,10 @@ pub fn syscall_dispatch(
                                 return len as u64;
                             }
                             Ok(crate::net::socket::RecvResult::WouldBlock) => {
-                                crate::task::scheduler::block_current_task();
+                                if crate::drivers::timer::TimerDriver::get_ticks() - start_ticks > timeout_ticks {
+                                    return (-1i64) as u64;
+                                }
+                                crate::task::scheduler::yield_current_task();
                             }
                             Err(_) => return u64::MAX,
                         }
@@ -491,21 +502,28 @@ pub fn syscall_dispatch(
                     let task_id = p.main_task_id;
                     drop(ptable);
                     let start_ticks = crate::drivers::timer::TimerDriver::get_ticks();
-                    let timeout_ticks = 100; // 1 second (100 HZ PIT)
+                    let timeout_ticks = 500; // 5 seconds (100 HZ PIT)
                     let mut retries = 0;
                     loop {
                         match crate::net::socket::sys_connect(sock_id, dest_ip, dest_port, task_id) {
                             Ok(()) => {
                                 return 0;
                             },
+                            Err("ConnectionRefused") => {
+                                return (-1i64) as u64;
+                            },
                             Err(_) => {
-                                if crate::drivers::timer::TimerDriver::get_ticks() - start_ticks > timeout_ticks {
+                                crate::net::smoltcp::poll_smoltcp();
+                                let current_ticks = crate::drivers::timer::TimerDriver::get_ticks();
+                                if current_ticks - start_ticks > timeout_ticks {
                                     return (-1i64) as u64;
                                 }
-                                if retries % 50 == 0 {
-                                    crate::net::socket::tcp_retry_syn(sock_id);
+                                
+                                // Only retry every 50 ticks (500ms)
+                                if (current_ticks - start_ticks) > (retries * 50) {
+                                    retries += 1;
                                 }
-                                retries += 1;
+                                
                                 crate::task::scheduler::yield_current_task();
                             }
                         }
@@ -533,7 +551,10 @@ pub fn syscall_dispatch(
                 if let Some(crate::process::FileDescriptor::Socket(sock_id)) = p.get_fd(fd) {
                     drop(ptable);
                     match crate::net::socket::sys_send(sock_id, slice) {
-                        Ok(n) => n as u64,
+                        Ok(n) => {
+                            crate::net::smoltcp::poll_smoltcp();
+                            n as u64
+                        },
                         Err(_) => u64::MAX,
                     }
                 } else {
@@ -563,7 +584,8 @@ pub fn syscall_dispatch(
                         match crate::net::socket::sys_recv(sock_id, slice, task_id) {
                             Ok(crate::net::socket::RecvResult::Data { len, .. }) => return len as u64,
                             Ok(crate::net::socket::RecvResult::WouldBlock) => {
-                                crate::task::scheduler::block_current_task();
+                                crate::net::smoltcp::poll_smoltcp();
+                                crate::task::scheduler::yield_current_task();
                             }
                             Err(_) => return u64::MAX,
                         }
@@ -605,6 +627,42 @@ pub fn syscall_dispatch(
                 }
             }
             (-1i64) as u64
+        }
+
+        SYS_PING => {
+            let dest_ip = arg1 as u32;
+            let sequence = arg2 as u16;
+            
+            // Clear any old replies in the socket queue
+            while crate::net::smoltcp::smoltcp_ping_recv(1234).is_some() {}
+            
+            let start_ticks = crate::drivers::timer::TimerDriver::get_ticks();
+            let timeout_ticks = 200; // 2 seconds at 100Hz
+            
+            loop {
+                if crate::net::smoltcp::smoltcp_ping_send(dest_ip, 1234, sequence, b"ping").is_ok() {
+                    // Send succeeded! Now wait for reply
+                    loop {
+                        crate::net::smoltcp::poll_smoltcp();
+                        if matches!(crate::net::smoltcp::smoltcp_ping_recv(1234), Some((src_ip, ident, rx_seq)) if src_ip == dest_ip && ident == 1234 && rx_seq == sequence) {
+                            return 0;
+                        }
+                        
+                        let current_ticks = crate::drivers::timer::TimerDriver::get_ticks();
+                        if current_ticks - start_ticks > timeout_ticks {
+                            return (-1i64) as u64;
+                        }
+                        crate::task::scheduler::yield_current_task();
+                    }
+                }
+                
+                // ARP resolving or buffer full, wait a bit
+                let current_ticks = crate::drivers::timer::TimerDriver::get_ticks();
+                if current_ticks - start_ticks > timeout_ticks {
+                    return (-1i64) as u64;
+                }
+                crate::task::scheduler::yield_current_task();
+            }
         }
 
         _ => u64::MAX,

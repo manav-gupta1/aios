@@ -1,13 +1,33 @@
 #![no_std]
-
+#![allow(clippy::missing_safety_doc)]
 use core::arch::asm;
 
 pub const SYS_SOCKET: usize = 19;
+pub const SYS_BIND: usize = 20;
+pub const SYS_SENDTO: usize = 21;
+pub const SYS_RECVFROM: usize = 22;
 pub const SYS_CONNECT: usize = 23;
 pub const SYS_SEND: usize = 24;
 pub const SYS_RECV: usize = 25;
 pub const SYS_DNS_RESOLVE: usize = 26;
+pub const SYS_PING: usize = 27;
 pub const SYS_CLOSE: usize = 9;
+
+#[inline(always)]
+pub fn sys_ping(dest_ip: u32, sequence: u16) -> isize {
+    let ret: isize;
+    unsafe {
+        asm!(
+            "int 0x80",
+            in("rax") SYS_PING,
+            in("rdi") dest_ip as usize,
+            in("rsi") sequence as usize,
+            lateout("rax") ret,
+            options(nostack)
+        );
+    }
+    ret
+}
 
 #[inline(always)]
 pub fn sys_socket(domain: usize, type_: usize, protocol: usize) -> isize {
@@ -70,6 +90,60 @@ pub fn sys_recv(fd: usize, buf: &mut [u8]) -> isize {
             in("rdi") fd,
             in("rsi") buf.as_mut_ptr() as usize,
             in("rdx") buf.len(),
+            lateout("rax") ret,
+            options(nostack)
+        );
+    }
+    ret
+}
+
+#[inline(always)]
+pub fn sys_bind(fd: usize, port: u16) -> isize {
+    let ret: isize;
+    unsafe {
+        asm!(
+            "int 0x80",
+            in("rax") SYS_BIND,
+            in("rdi") fd,
+            in("rsi") port as usize,
+            lateout("rax") ret,
+            options(nostack)
+        );
+    }
+    ret
+}
+
+#[inline(always)]
+pub fn sys_sendto(fd: usize, dest_ip: u32, dest_port: u16, buf: &[u8]) -> isize {
+    let ret: isize;
+    unsafe {
+        asm!(
+            "int 0x80",
+            in("rax") SYS_SENDTO,
+            in("rdi") fd,
+            in("rsi") buf.as_ptr() as usize,
+            in("rdx") buf.len(),
+            in("rcx") dest_ip as usize,
+            in("r8") dest_port as usize,
+            lateout("rax") ret,
+            options(nostack)
+        );
+    }
+    ret
+}
+
+#[inline(always)]
+pub fn sys_recvfrom(fd: usize, buf: &mut [u8], src_ip: &mut u32, src_port: &mut u16) -> isize {
+    let ret: isize;
+    unsafe {
+        asm!(
+            "int 0x80",
+            in("rax") SYS_RECVFROM,
+            in("rdi") fd,
+            in("rsi") buf.as_mut_ptr() as usize,
+            in("rdx") buf.len(),
+            in("rcx") src_ip as *mut u32 as usize,
+            in("r8") src_port as *mut u16 as usize,
             lateout("rax") ret,
             options(nostack)
         );

@@ -1,127 +1,97 @@
-use alloc::collections::VecDeque;
-use alloc::vec::Vec;
+#![allow(clippy::all)]
 use spin::Mutex;
+use alloc::vec::Vec;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum SocketProtocol {
-    UDP,
     TCP,
+    UDP,
+    ICMP,
 }
 
-pub struct UdpSocket {
+pub struct SmolTcpSocket {
+    pub handle: smoltcp::iface::SocketHandle,
     pub local_port: u16,
-    pub rx_queue: VecDeque<(u32, u16, Vec<u8>)>, // (src_ip, src_port, payload)
-    pub waker_task_id: Option<usize>, // Task blocked on recvfrom
+    pub waker_task_id: Option<usize>,
+    pub is_connecting: bool,
 }
 
 pub enum Socket {
-    Udp(Mutex<UdpSocket>),
-    Tcp(Mutex<crate::net::tcp::TcpSocket>),
+    SmolTcp(Mutex<SmolTcpSocket>),
 }
 
 pub struct SocketTable {
     pub sockets: Vec<Option<Socket>>,
-    next_id: usize,
 }
 
 impl SocketTable {
     pub const fn new() -> Self {
         SocketTable {
             sockets: Vec::new(),
-            next_id: 1, // 0 is reserved/invalid
         }
     }
 
-    pub fn alloc_socket(&mut self, protocol: SocketProtocol) -> usize {
-        let sock = match protocol {
-            SocketProtocol::UDP => {
-                Socket::Udp(Mutex::new(UdpSocket {
-                    local_port: 0,
-                    rx_queue: VecDeque::with_capacity(32),
-                    waker_task_id: None,
-                }))
-            }
-            SocketProtocol::TCP => {
-                Socket::Tcp(Mutex::new(crate::net::tcp::TcpSocket::new()))
-            }
+    pub fn alloc_socket(&mut self, proto: SocketProtocol) -> usize {
+        let handle = if proto == SocketProtocol::TCP {
+            let tcp_rx_buffer = smoltcp::socket::tcp::SocketBuffer::new(alloc::vec![0; 8192]);
+            let tcp_tx_buffer = smoltcp::socket::tcp::SocketBuffer::new(alloc::vec![0; 8192]);
+            let tcp_socket = smoltcp::socket::tcp::Socket::new(tcp_rx_buffer, tcp_tx_buffer);
+            crate::net::smoltcp::try_with_smoltcp_sockets(|sockets| {
+                sockets.add(tcp_socket)
+            }).unwrap()
+        } else {
+            let tcp_rx_buffer = smoltcp::socket::tcp::SocketBuffer::new(alloc::vec![0; 8192]);
+            let tcp_tx_buffer = smoltcp::socket::tcp::SocketBuffer::new(alloc::vec![0; 8192]);
+            let tcp_socket = smoltcp::socket::tcp::Socket::new(tcp_rx_buffer, tcp_tx_buffer);
+            crate::net::smoltcp::try_with_smoltcp_sockets(|sockets| {
+                sockets.add(tcp_socket)
+            }).unwrap()
         };
 
-        // Find free slot
+        let socket = Some(Socket::SmolTcp(spin::Mutex::new(SmolTcpSocket {
+            handle,
+            local_port: 0,
+            waker_task_id: None,
+            is_connecting: false,
+        })));
+
         for (i, slot) in self.sockets.iter_mut().enumerate() {
             if slot.is_none() {
-                *slot = Some(sock);
-                return i + 1;
+                *slot = socket;
+                return i;
             }
         }
-
-        self.sockets.push(Some(sock));
-        self.sockets.len()
-    }
-
-    pub fn get_socket(&self, id: usize) -> Option<&Socket> {
-        if id == 0 || id > self.sockets.len() {
-            return None;
-        }
-        self.sockets[id - 1].as_ref()
+        let id = self.sockets.len();
+        self.sockets.push(socket);
+        id
     }
 
     pub fn close_socket(&mut self, id: usize) {
-        if id > 0 && id <= self.sockets.len() {
-            if let Some(sock) = self.sockets[id - 1].take() {
-                match sock {
-                    Socket::Udp(udp) => {
-                        let u = udp.lock();
-                        if let Some(task_id) = u.waker_task_id {
-                            crate::task::scheduler::SCHEDULER.lock().set_task_state(task_id, crate::task::TaskState::Ready);
-                        }
-                    }
-                    Socket::Tcp(tcp) => {
-                        let t = tcp.lock();
-                        if let Some(task_id) = t.waker_task_id {
-                            crate::task::scheduler::SCHEDULER.lock().set_task_state(task_id, crate::task::TaskState::Ready);
-                        }
-                    }
+        if id < self.sockets.len() {
+            if let Some(Socket::SmolTcp(ref tcp_mutex)) = self.sockets[id] {
+                let tcp = tcp_mutex.lock();
+                let handle = tcp.handle;
+                if let Some(task_id) = tcp.waker_task_id {
+                    crate::task::scheduler::SCHEDULER.lock().set_task_state(task_id, crate::task::TaskState::Ready);
                 }
+                drop(tcp);
+                crate::net::smoltcp::try_with_smoltcp_sockets(|sockets| {
+                    sockets.remove(handle);
+                });
             }
+            self.sockets[id] = None;
         }
     }
 
-    pub fn deliver_udp(&mut self, dest_port: u16, src_ip: u32, src_port: u16, data: &[u8]) -> Option<usize> {
-        crate::drivers::storage::serial_print("[UDP RX] packet received\n");
-        crate::drivers::storage::serial_print("[UDP RX] destination port\n");
-        crate::drivers::storage::serial_print("[UDP RX] source port\n");
-        for slot in &self.sockets {
-            if let Some(Socket::Udp(udp)) = slot {
-                let mut u = udp.lock();
-                if u.local_port == dest_port {
-                    if u.rx_queue.len() < 32 {
-                        let mut payload = alloc::vec::Vec::with_capacity(data.len());
-                        payload.extend_from_slice(data);
-                        u.rx_queue.push_back((src_ip, src_port, payload));
-                        crate::drivers::storage::serial_print("[UDP RX] delivered to socket\n");
-                    }
-                    if let Some(task_id) = u.waker_task_id {
-                        u.waker_task_id = None;
-                        return Some(task_id);
-                    }
-                }
-            }
-        }
-        None
+    pub fn get_socket(&self, id: usize) -> Option<&Socket> {
+        self.sockets.get(id)?.as_ref()
     }
-
+    
     pub fn snapshots(&self) -> alloc::vec::Vec<(&'static str, u16)> {
         let mut list = alloc::vec::Vec::new();
         for slot in &self.sockets {
-            if let Some(sock) = slot {
-                match sock {
-                    Socket::Udp(udp) => {
-                        list.push(("UDP", udp.lock().local_port));
-                    }
-                    Socket::Tcp(tcp) => {
-                        list.push(("TCP", tcp.lock().local_port));
-                    }
-                }
+            if let Some(Socket::SmolTcp(tcp)) = slot {
+                list.push(("SMOLTCP", tcp.lock().local_port));
             }
         }
         list
@@ -130,21 +100,11 @@ impl SocketTable {
 
 pub static SOCKET_TABLE: Mutex<SocketTable> = Mutex::new(SocketTable::new());
 
-// Bind a socket to a local port
 pub fn sys_bind(socket_id: usize, port: u16) -> Result<(), &'static str> {
     let table = SOCKET_TABLE.lock();
     let sock = table.get_socket(socket_id).ok_or("Invalid socket ID")?;
-    
     match sock {
-        Socket::Udp(udp) => {
-            let mut u = udp.lock();
-            if u.local_port != 0 {
-                return Err("Already bound");
-            }
-            u.local_port = port;
-            Ok(())
-        }
-        Socket::Tcp(tcp) => {
+        Socket::SmolTcp(tcp) => {
             let mut t = tcp.lock();
             if t.local_port != 0 {
                 return Err("Already bound");
@@ -155,45 +115,8 @@ pub fn sys_bind(socket_id: usize, port: u16) -> Result<(), &'static str> {
     }
 }
 
-// Send data over a socket
-pub fn sys_sendto(socket_id: usize, dest_ip: u32, dest_port: u16, data: &[u8]) -> Result<usize, &'static str> {
-    let table = SOCKET_TABLE.lock();
-    let sock = table.get_socket(socket_id).ok_or("Invalid socket ID")?;
-    
-    match sock {
-        Socket::Udp(udp) => {
-            let local_port = udp.lock().local_port;
-            let _src_port = if local_port == 0 {
-                // Auto-bind to ephemeral port (simplification: just pick a random/fixed one for now)
-                let ephemeral = 49152 + (socket_id as u16);
-                udp.lock().local_port = ephemeral;
-                ephemeral
-            } else {
-                local_port
-            };
-            
-            // We must unlock SOCKET_TABLE before sending, as sending might trigger ARP resolution
-            // which might trigger receive_packet which might lock NETWORK_DEVICE. 
-            // It's safe to drop here because `Socket` lives in the static table.
-        }
-        Socket::Tcp(_) => return Err("Use send for TCP"),
-    }
-    
-    // Drop lock before doing network I/O
-    drop(table);
-    
-    // Now get it again just to extract local_port
-    let local_port = {
-        let table = SOCKET_TABLE.lock();
-        let sock = table.get_socket(socket_id).unwrap();
-        match sock {
-            Socket::Udp(udp) => udp.lock().local_port,
-            Socket::Tcp(tcp) => tcp.lock().local_port,
-        }
-    };
-    
-    crate::net::udp::send_udp_packet(dest_ip, local_port, dest_port, data)?;
-    Ok(data.len())
+pub fn sys_sendto(_socket_id: usize, _dest_ip: u32, _dest_port: u16, _data: &[u8]) -> Result<usize, &'static str> {
+    Err("Legacy UDP disabled")
 }
 
 pub enum RecvResult {
@@ -201,66 +124,46 @@ pub enum RecvResult {
     WouldBlock,
 }
 
-// Receive data from a socket
-pub fn sys_recvfrom(socket_id: usize, buf: &mut [u8], task_id: usize) -> Result<RecvResult, &'static str> {
-    let table = SOCKET_TABLE.lock();
-    let sock = table.get_socket(socket_id).ok_or("Invalid socket ID")?;
-    
-    match sock {
-        Socket::Udp(udp) => {
-            let mut u = udp.lock();
-            if let Some((src_ip, src_port, payload)) = u.rx_queue.pop_front() {
-                let copy_len = core::cmp::min(buf.len(), payload.len());
-                buf[..copy_len].copy_from_slice(&payload[..copy_len]);
-                u.waker_task_id = None;
-                Ok(RecvResult::Data { src_ip, src_port, len: copy_len })
-            } else {
-                u.waker_task_id = Some(task_id);
-                Ok(RecvResult::WouldBlock)
-            }
-        }
-        Socket::Tcp(_) => Err("Use recv for TCP"),
-    }
+pub fn sys_recvfrom(_socket_id: usize, _buf: &mut [u8], _task_id: usize) -> Result<RecvResult, &'static str> {
+    Err("Legacy UDP disabled")
 }
 
 pub fn sys_connect(socket_id: usize, dest_ip: u32, dest_port: u16, task_id: usize) -> Result<(), &'static str> {
     let table = SOCKET_TABLE.lock();
     let sock = table.get_socket(socket_id).ok_or("Invalid socket ID")?;
-    
     match sock {
-        Socket::Udp(_) => Err("Connect not supported for UDP"),
-        Socket::Tcp(tcp_mutex) => {
+        Socket::SmolTcp(tcp_mutex) => {
             let mut tcp = tcp_mutex.lock();
+            let dest_addr = smoltcp::wire::IpAddress::v4((dest_ip >> 24) as u8, (dest_ip >> 16) as u8, (dest_ip >> 8) as u8, dest_ip as u8);
+            let handle = tcp.handle;
             
-            if tcp.state == crate::net::tcp::TcpState::Established {
-                return Ok(());
-            }
-            
-            if tcp.state == crate::net::tcp::TcpState::Closed {
-                tcp.remote_ip = dest_ip;
-                tcp.remote_port = dest_port;
-                if tcp.local_port == 0 {
-                    tcp.local_port = 49152 + (socket_id as u16);
+            let result = crate::net::smoltcp::try_with_smoltcp_sockets(|sockets| {
+                let socket = sockets.get_mut::<smoltcp::socket::tcp::Socket>(handle);
+                match socket.state() {
+                    smoltcp::socket::tcp::State::Closed => {
+                        if tcp.is_connecting {
+                            tcp.is_connecting = false;
+                            Err("ConnectionRefused")
+                        } else {
+                            let local_port = if tcp.local_port == 0 { 49152 + (socket_id as u16) } else { tcp.local_port };
+                            tcp.local_port = local_port;
+                            tcp.is_connecting = true;
+                            if let Err(e) = socket.connect(crate::net::smoltcp::SMOLTCP_IFACE.lock().as_mut().unwrap().context(), (dest_addr, dest_port), local_port) { crate::console::write_str(alloc::format!("[SYS_CONNECT] connect err: {:?}\n", e).as_str()); }
+                            Err("WouldBlock")
+                        }
+                    },
+                    smoltcp::socket::tcp::State::Established => {
+                        tcp.is_connecting = false;
+                        Ok(())
+                    },
+                    state => { crate::console::write_str(alloc::format!("[SYS_CONNECT] state: {:?}\n", state).as_str()); Err("WouldBlock") },
                 }
-                tcp.state = crate::net::tcp::TcpState::SynSent;
-                tcp.waker_task_id = Some(task_id);
-            } else if tcp.state == crate::net::tcp::TcpState::SynSent {
+            }).unwrap_or(Err("Network offline"));
+            
+            if result.is_err() {
                 tcp.waker_task_id = Some(task_id);
             }
-            Err("WouldBlock")
-        }
-    }
-}
-
-pub fn tcp_retry_syn(socket_id: usize) {
-    let table = SOCKET_TABLE.lock();
-    if let Some(Socket::Tcp(tcp_mutex)) = table.get_socket(socket_id) {
-        let tcp = tcp_mutex.lock();
-        if tcp.state == crate::net::tcp::TcpState::SynSent {
-            let _ = crate::net::tcp::send_tcp_packet(
-                tcp.remote_ip, tcp.local_port, tcp.remote_port,
-                tcp.seq_num, tcp.ack_num, crate::net::tcp::TCP_FLAG_SYN, &[]
-            );
+            result
         }
     }
 }
@@ -268,23 +171,21 @@ pub fn tcp_retry_syn(socket_id: usize) {
 pub fn sys_send(socket_id: usize, data: &[u8]) -> Result<usize, &'static str> {
     let table = SOCKET_TABLE.lock();
     let sock = table.get_socket(socket_id).ok_or("Invalid socket ID")?;
-    
     match sock {
-        Socket::Udp(_) => Err("Use sendto for UDP"),
-        Socket::Tcp(tcp_mutex) => {
-            let mut tcp = tcp_mutex.lock();
-            if tcp.state != crate::net::tcp::TcpState::Established {
-                return Err("Not connected");
-            }
-            
-            let _ = crate::net::tcp::send_tcp_packet(
-                tcp.remote_ip, tcp.local_port, tcp.remote_port,
-                tcp.seq_num, tcp.ack_num, crate::net::tcp::TCP_FLAG_ACK | crate::net::tcp::TCP_FLAG_PSH, data
-            );
-            
-            crate::console::write_str(alloc::format!("[SYS_SEND] state after send: {:?}\n", tcp.state).as_str());
-            tcp.seq_num += data.len() as u32;
-            Ok(data.len())
+        Socket::SmolTcp(tcp_mutex) => {
+            let tcp = tcp_mutex.lock();
+            let handle = tcp.handle;
+            crate::net::smoltcp::try_with_smoltcp_sockets(|sockets| {
+                let socket = sockets.get_mut::<smoltcp::socket::tcp::Socket>(handle);
+                if socket.can_send() {
+                    match socket.send_slice(data) {
+                        Ok(len) => Ok(len),
+                        Err(_) => Err("Send failed"),
+                    }
+                } else {
+                    Err("Cannot send")
+                }
+            }).unwrap_or(Err("Network offline"))
         }
     }
 }
@@ -292,25 +193,62 @@ pub fn sys_send(socket_id: usize, data: &[u8]) -> Result<usize, &'static str> {
 pub fn sys_recv(socket_id: usize, buf: &mut [u8], task_id: usize) -> Result<RecvResult, &'static str> {
     let table = SOCKET_TABLE.lock();
     let sock = table.get_socket(socket_id).ok_or("Invalid socket ID")?;
-    
     match sock {
-        Socket::Udp(_) => Err("Use recvfrom for UDP"),
-        Socket::Tcp(tcp_mutex) => {
+        Socket::SmolTcp(tcp_mutex) => {
             let mut tcp = tcp_mutex.lock();
-            
-            if !tcp.rx_queue.is_empty() {
-                let copy_len = core::cmp::min(buf.len(), tcp.rx_queue.len());
-                for i in 0..copy_len {
-                    buf[i] = tcp.rx_queue.pop_front().unwrap();
+            let handle = tcp.handle;
+            let result = crate::net::smoltcp::try_with_smoltcp_sockets(|sockets| {
+                let socket = sockets.get_mut::<smoltcp::socket::tcp::Socket>(handle);
+                if socket.can_recv() {
+                    match socket.recv_slice(buf) {
+                        Ok(len) if len > 0 => {
+                            let endpt = socket.remote_endpoint().unwrap();
+                            let smoltcp::wire::IpAddress::Ipv4(v4) = endpt.addr;
+                            let b = v4.octets();
+                            let src_ip = ((b[0] as u32) << 24) | ((b[1] as u32) << 16) | ((b[2] as u32) << 8) | (b[3] as u32);
+                            Ok(RecvResult::Data { src_ip, src_port: endpt.port, len })
+                        }
+                        _ => Err("WouldBlock")
+                    }
+                } else if !socket.may_recv() {
+                    // EOF
+                    Ok(RecvResult::Data { src_ip: 0, src_port: 0, len: 0 })
+                } else {
+                    Err("WouldBlock")
                 }
-                tcp.waker_task_id = None;
-                Ok(RecvResult::Data { src_ip: tcp.remote_ip, src_port: tcp.remote_port, len: copy_len })
-            } else if tcp.state == crate::net::tcp::TcpState::Closed || tcp.state == crate::net::tcp::TcpState::CloseWait {
-                crate::console::write_str(alloc::format!("[SYS_RECV] Returning EOF because state is {:?}\n", tcp.state).as_str());
-                Ok(RecvResult::Data { src_ip: tcp.remote_ip, src_port: tcp.remote_port, len: 0 }) // EOF
-            } else {
-                tcp.waker_task_id = Some(task_id);
-                Ok(RecvResult::WouldBlock)
+            }).unwrap_or(Err("Network offline"));
+            
+            match result {
+                Ok(r) => {
+                    tcp.waker_task_id = None;
+                    Ok(r)
+                },
+                Err(e) if e == "WouldBlock" => {
+                    tcp.waker_task_id = Some(task_id);
+                    Ok(RecvResult::WouldBlock)
+                },
+                Err(e) => Err(e),
+            }
+        }
+    }
+}
+
+pub fn wake_smoltcp_sockets() {
+    if let Some(table) = SOCKET_TABLE.try_lock() {
+        for slot in &table.sockets {
+            if let Some(Socket::SmolTcp(tcp_mutex)) = slot {
+                if let Some(mut tcp) = tcp_mutex.try_lock() {
+                    if let Some(task_id) = tcp.waker_task_id {
+                        let should_wake = crate::net::smoltcp::try_with_smoltcp_sockets(|sockets| {
+                            let socket = sockets.get_mut::<smoltcp::socket::tcp::Socket>(tcp.handle);
+                            socket.can_recv() || socket.can_send() || !socket.is_open() || !socket.may_recv()
+                        }).unwrap_or(false);
+                        if should_wake {
+                            tcp.waker_task_id = None;
+                            crate::task::scheduler::SCHEDULER.lock().set_task_state(task_id, crate::task::TaskState::Ready);
+                        }
+                    }
+                }
             }
         }
     }

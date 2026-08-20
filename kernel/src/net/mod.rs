@@ -1,13 +1,6 @@
-pub mod ethernet;
-pub mod arp;
-pub mod ipv4;
-pub mod icmp;
-pub mod tcp;
-pub mod udp;
 pub mod socket;
-pub mod dhcp;
+pub mod smoltcp;
 pub mod dns;
-
 use core::sync::atomic::{AtomicU32, Ordering};
 use crate::drivers::network::NETWORK_DEVICE;
 
@@ -15,7 +8,7 @@ use crate::drivers::network::NETWORK_DEVICE;
 pub static LOCAL_IP: AtomicU32 = AtomicU32::new(0);
 pub static NETMASK: AtomicU32 = AtomicU32::new(0);
 pub static GATEWAY: AtomicU32 = AtomicU32::new(0);
-pub static DNS_SERVER: AtomicU32 = AtomicU32::new(0);
+pub static DNS_SERVER: AtomicU32 = AtomicU32::new(0x0A000203);
 
 // Helper to construct an IPv4 integer from 4 bytes (Big Endian)
 pub const fn ip(a: u8, b: u8, c: u8, d: u8) -> u32 {
@@ -29,23 +22,13 @@ pub fn init() {
     NETMASK.store(ip(255, 255, 255, 0), Ordering::SeqCst);
     // 10.0.2.2
     GATEWAY.store(ip(10, 0, 2, 2), Ordering::SeqCst);
-    // 10.0.2.3 (QEMU SLIRP DNS)
+    // 10.0.2.3 (QEMU slirp built-in DNS forwarder -> host's DNS config)
     DNS_SERVER.store(ip(10, 0, 2, 3), Ordering::SeqCst);
     
-    arp::init();
-    
     crate::drivers::storage::serial_print("[NET] IP Layer starting (using static IP for test)...\n");
-    // dhcp::run_dhcp_client() currently blocks indefinitely in QEMU user net.
-    // if let Err(_) = dhcp::run_dhcp_client() {
     crate::drivers::storage::serial_print("[NET] DHCP skipped, using static configuration (10.0.2.15)\n");
-    // } else {
-    //     crate::drivers::storage::serial_print("[NET] DHCP successful\n");
-    // }
-}
-
-pub fn handle_packet(packet: &[u8]) {
-    // Route packet to Ethernet layer
-    ethernet::handle_ethernet_frame(packet);
+    
+    smoltcp::init_smoltcp();
 }
 
 pub fn handle_network_interrupt() {
@@ -55,14 +38,20 @@ pub fn handle_network_interrupt() {
         if let Some(dev) = net_dev.as_mut() {
             dev.ack_interrupt();
             while let Some(pkt) = dev.receive_packet() {
+                crate::drivers::storage::serial_print(&alloc::format!("[NET INT] packet received len={}\n", pkt.len()));
                 packets.push(pkt);
             }
         }
     }
     
-    for pkt in packets {
-        handle_packet(&pkt);
+    {
+        let mut queue = crate::net::smoltcp::SMOLTCP_RX_QUEUE.lock();
+        for pkt in &packets {
+            queue.push_back(pkt.clone());
+        }
     }
+    
+    crate::net::smoltcp::poll_smoltcp();
 }
 
 // Convert u16 to Big Endian bytes
@@ -80,25 +69,4 @@ pub fn htonl(v: u32) -> u32 {
 
 pub fn ntohl(v: u32) -> u32 {
     u32::from_be(v)
-}
-
-// Checksum calculation (RFC 1071)
-pub fn calculate_checksum(data: &[u8]) -> u16 {
-    let mut sum: u32 = 0;
-    let mut i = 0;
-    while i < data.len() {
-        let word = if i + 1 < data.len() {
-            ((data[i] as u32) << 8) | (data[i+1] as u32)
-        } else {
-            (data[i] as u32) << 8
-        };
-        sum = sum.wrapping_add(word);
-        i += 2;
-    }
-    
-    while (sum >> 16) > 0 {
-        sum = (sum & 0xFFFF) + (sum >> 16);
-    }
-    
-    !(sum as u16)
 }

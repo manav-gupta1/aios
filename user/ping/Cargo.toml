@@ -1,5 +1,5 @@
 [package]
-name = "udp-test"
+name = "ping"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,7 +7,8 @@ edition = "2021"
 nova-net = { path = "../nova-net" }
 
 [profile.release]
-opt-level = "z"
 panic = "abort"
+opt-level = "s"
+strip = true
 lto = true
 codegen-units = 1

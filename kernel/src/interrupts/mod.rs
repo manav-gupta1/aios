@@ -171,6 +171,7 @@ extern "x86-interrupt" fn page_fault_handler(
         crate::drivers::storage::serial_print(&num_str);
         
         crate::console::write_str("\n[Fault] User process error: Page Fault (terminating task)\n");
+        crate::console::write_str(&num_str);
         crate::process::PROCESS_TABLE.lock().exit_process(pid, 1);
         crate::task::scheduler::exit_current_task();
     } else {

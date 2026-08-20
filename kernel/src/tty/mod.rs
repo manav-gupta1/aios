@@ -52,6 +52,10 @@ impl Tty {
         self.completed_lines.pop_front()
     }
 
+    pub fn try_push_line(&mut self, s: &str) {
+        self.completed_lines.push_back(String::from(s));
+    }
+
     pub fn read_user_buffer(&mut self, caller_pid: usize, buf: &mut [u8]) -> Result<usize, ()> {
         if let Some(mut line) = self.completed_lines.pop_front() {
             let to_copy = core::cmp::min(line.len(), buf.len());

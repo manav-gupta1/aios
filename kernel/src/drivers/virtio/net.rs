@@ -7,6 +7,12 @@ use crate::drivers::network::NetworkDevice;
 // VirtIO Net device config offset 0 contains the MAC address
 const REG_MAC: u16 = 0;
 
+// RX virtqueue sizing constants
+const RX_QUEUE_SIZE: u16 = 256;      // avail/used ring capacity (also TX)
+const VIRTIO_NET_HDR_SIZE: u64 = 10; // VirtioNetHdr size
+const RX_DATA_BUFFER: usize = 2038;  // per-RX-buffer payload capacity (2048 - 10)
+const RX_DESC_COUNT: usize = 256;    // total RX descriptors (128 chains x 2)
+
 pub struct VirtioNet {
     io_base: u16,
     irq: u8,
@@ -263,69 +269,102 @@ impl NetworkDevice for VirtioNet {
         self.tx_pkts += 1;
         self.tx_bytes += data.len() as u64;
         
+        crate::drivers::storage::serial_print(&alloc::format!("[VIRTIO TX] packet transmitted len={} (eth frame, incl padding)\n", data.len()));
+        
         // Wait a tiny bit and check used index
         for _ in 0..1000 {
             core::hint::spin_loop();
         }
-        let used_idx = unsafe { (*self.tx_used).idx };
-        crate::drivers::storage::serial_print(&alloc::format!("TX Used idx: {}\n", used_idx));
+        let _used_idx = unsafe { (*self.tx_used).idx };
+        
+        // Debug dump for small frames (ARP/TCP/DNS/UDP) - print first 48 bytes
+        if data.len() >= 42 && data.len() <= 200 {
+            crate::drivers::storage::serial_print(&alloc::format!("[VIRTIO TX DUMP] tx_slot={} phys_addr={:x}\n", tx_slot, data_phys_addr));
+            let n = core::cmp::min(48, data.len());
+            for (i, b) in data[..n].iter().enumerate() {
+                if i % 16 == 0 { crate::drivers::storage::serial_print("\n"); }
+                crate::drivers::storage::serial_print(&alloc::format!("{:02x} ", b));
+            }
+            crate::drivers::storage::serial_print("\n");
+        }
         
         Ok(())
     }
     
     fn receive_packet(&mut self) -> Option<Vec<u8>> {
-        let used_idx = unsafe { (*self.rx_used).idx };
-        if self.rx_last_used_idx == used_idx {
-            return None; // No new packets
-        }
-        
-        compiler_fence(Ordering::SeqCst);
-        
-        let last_used = (self.rx_last_used_idx % 256) as usize;
-        let hdr_idx = unsafe { (*self.rx_used).ring[last_used].id as usize };
-        // The total length written includes the header length
-        let total_len = unsafe { (*self.rx_used).ring[last_used].len as usize };
-        
-        let hdr_size = 10; // VirtioNetHdr
-        if total_len <= hdr_size {
+        // Drain the used ring, recycling every descriptor chain (correct VirtIO:
+        // only the head descriptor is placed back into the avail ring) and
+        // skipping malformed/empty frames instead of stalling the drain loop.
+        for _ in 0..RX_DESC_COUNT {
+            let used_idx = unsafe { (*self.rx_used).idx };
+            if self.rx_last_used_idx == used_idx {
+                return None; // No new packets
+            }
+            compiler_fence(Ordering::SeqCst);
+
+            let last_used = (self.rx_last_used_idx % RX_QUEUE_SIZE) as usize;
+            let hdr_idx = unsafe { (*self.rx_used).ring[last_used].id as usize };
+            // Total length written by the device includes the virtio header.
+            let total_len = unsafe { (*self.rx_used).ring[last_used].len as usize };
+
+            // Always advance past this used entry BEFORE any early return.
             self.rx_last_used_idx = self.rx_last_used_idx.wrapping_add(1);
-            return None; // Drop invalid packet
+
+            // Reject descriptor indices that point outside our RX descriptor table
+            // or that are not a valid header (even) descriptor. Nothing we own can
+            // be recycled for a bogus id, so just skip it and keep draining.
+            if hdr_idx >= RX_DESC_COUNT || (hdr_idx % 2) != 0 {
+                continue;
+            }
+
+                        // Clamp to what our data buffer can actually hold. total_len is
+            // device-supplied, so never trust it to index our buffer verbatim.
+            let data_len = total_len
+                .saturating_sub(VIRTIO_NET_HDR_SIZE as usize)
+                .min(RX_DATA_BUFFER);
+
+            // Recover the packet data address from the header descriptor.
+            let phys_offset = crate::memory::get_phys_offset().unwrap();
+            let buf_phys = unsafe { (*self.rx_desc.add(hdr_idx)).addr };
+            let buf_virt = buf_phys + phys_offset;
+
+            // Data starts at buf_virt + header size.
+            let data_ptr = (buf_virt + VIRTIO_NET_HDR_SIZE) as *const u8;
+
+            // Copy the frame out BEFORE recycling the buffer — this prevents
+            // the device from overwriting the buffer we are still reading.
+            let mut packet = Vec::with_capacity(data_len);
+            if data_len > 0 {
+                unsafe {
+                    let slice = core::slice::from_raw_parts(data_ptr, data_len);
+                    packet.extend_from_slice(slice);
+                }
+            }
+
+            // NOW recycle the chain head back into the avail ring. Only the
+            // head descriptor is returned; the device follows next= to the data
+            // descriptor. This must happen AFTER the data copy above.
+            let avail_idx = (unsafe { (*self.rx_avail).idx } % RX_QUEUE_SIZE) as usize;
+            unsafe {
+                (*self.rx_avail).ring[avail_idx] = hdr_idx as u16;
+                compiler_fence(Ordering::SeqCst);
+                (*self.rx_avail).idx = (*self.rx_avail).idx.wrapping_add(1);
+                compiler_fence(Ordering::SeqCst);
+                Port::<u16>::new(self.io_base + REG_QUEUE_NOTIFY).write(0);
+            }
+
+            if data_len == 0 {
+                continue; // Empty/undersized frame — buffer already recycled.
+            }
+
+            self.rx_pkts += 1;
+            self.rx_bytes += data_len as u64;
+
+            crate::drivers::storage::serial_print(&alloc::format!("[NET RX] packet received len={}\n", data_len));
+            return Some(packet);
         }
-        
-        let data_len = total_len - hdr_size;
-        
-        // Recover original buffer address from the header descriptor
-        let phys_offset = crate::memory::get_phys_offset().unwrap();
-        let buf_phys = unsafe { (*self.rx_desc.add(hdr_idx)).addr };
-        let buf_virt = buf_phys + phys_offset;
-        
-        // Data starts at buf_virt + 10
-        let data_ptr = (buf_virt + hdr_size as u64) as *const u8;
-        
-        let mut packet = Vec::with_capacity(data_len);
-        unsafe {
-            let slice = core::slice::from_raw_parts(data_ptr, data_len);
-            packet.extend_from_slice(slice);
-        }
-        
-        crate::drivers::storage::serial_print(&alloc::format!("RX packet len={}\n", data_len));
-        
-        self.rx_last_used_idx = self.rx_last_used_idx.wrapping_add(1);
-        
-        // Put the descriptors back into the avail ring
-        let avail_idx = unsafe { (*self.rx_avail).idx % 256 } as usize;
-        unsafe {
-            (*self.rx_avail).ring[avail_idx] = hdr_idx as u16;
-            compiler_fence(Ordering::SeqCst);
-            (*self.rx_avail).idx = (*self.rx_avail).idx.wrapping_add(1);
-            compiler_fence(Ordering::SeqCst);
-            Port::<u16>::new(self.io_base + REG_QUEUE_NOTIFY).write(0);
-        }
-        
-        self.rx_pkts += 1;
-        self.rx_bytes += data_len as u64;    
-        
-        Some(packet)
+
+        None
     }
     
     fn ack_interrupt(&mut self) -> bool {

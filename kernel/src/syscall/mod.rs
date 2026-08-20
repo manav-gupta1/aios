@@ -118,7 +118,7 @@ pub fn syscall_dispatch(
             };
 
             loop {
-                match crate::process::waitpid(pid, target_pid) {
+                match crate::process::waitpid(pid, target_pid, false) {
                     Ok((child_pid, status)) => {
                         if arg2 != 0 {
                             let status_ptr = arg2 as *mut i32;

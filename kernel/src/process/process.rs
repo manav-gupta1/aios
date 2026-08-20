@@ -124,6 +124,7 @@ pub struct Process {
     pub blocked_signals: u64,
     pub sig_actions: [usize; 64],
     pub is_stopped: bool,
+    pub is_orphan: bool,
 }
 
 impl Process {
@@ -152,6 +153,7 @@ impl Process {
             blocked_signals: 0,
             sig_actions: [0; 64],
             is_stopped: false,
+            is_orphan: false,
         }
     }
 
@@ -178,6 +180,7 @@ impl Process {
             blocked_signals: 0,
             sig_actions: [0; 64],
             is_stopped: false,
+            is_orphan: false,
         }
     }
 

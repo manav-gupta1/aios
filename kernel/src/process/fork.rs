@@ -169,6 +169,7 @@ pub fn do_fork(
         blocked_signals: parent.blocked_signals,
         sig_actions: parent.sig_actions,
         is_stopped: false,
+        is_orphan: false,
     };
 
     table.processes.push(child_process);

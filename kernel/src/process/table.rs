@@ -148,6 +148,7 @@ impl ProcessTable {
         for proc in &mut self.processes {
             if proc.ppid == pid {
                 proc.ppid = 1;
+                proc.is_orphan = true;
             }
         }
 
@@ -161,6 +162,7 @@ impl ProcessTable {
         &mut self,
         caller_pid: usize,
         target: Option<usize>,
+        nohang: bool,
     ) -> Result<(usize, i32), WaitError> {
         if let Some(t) = target {
             // Find target child
@@ -172,16 +174,20 @@ impl ProcessTable {
 
             if self.processes[child_idx].state == ProcessState::Zombie {
                 let status = self.processes[child_idx].exit_status.unwrap_or(0);
+                let main_task_id = self.processes[child_idx].main_task_id;
                 self.processes[child_idx].address_space.unmap_all();
                 self.processes.remove(child_idx);
                 self.pid_allocator.deallocate(t);
+                crate::task::scheduler::SCHEDULER.lock().remove_task(main_task_id);
                 return Ok((t, status));
             } else {
-                // Child is still running -> block caller
-                if let Some(caller) = self.processes.iter_mut().find(|p| p.pid == caller_pid) {
-                    caller.state = ProcessState::Blocked;
-                    caller.waiting_target_pid = Some(Some(t));
-                    crate::task::set_task_state(caller.main_task_id, TaskState::Blocked);
+                // Child is still running -> block caller unless nohang
+                if !nohang {
+                    if let Some(caller) = self.processes.iter_mut().find(|p| p.pid == caller_pid) {
+                        caller.state = ProcessState::Blocked;
+                        caller.waiting_target_pid = Some(Some(t));
+                        crate::task::set_task_state(caller.main_task_id, TaskState::Blocked);
+                    }
                 }
                 return Err(WaitError::WouldBlock);
             }
@@ -200,18 +206,42 @@ impl ProcessTable {
             if let Some(idx) = zombie_idx {
                 let child_pid = self.processes[idx].pid;
                 let status = self.processes[idx].exit_status.unwrap_or(0);
+                let main_task_id = self.processes[idx].main_task_id;
                 self.processes[idx].address_space.unmap_all();
                 self.processes.remove(idx);
                 self.pid_allocator.deallocate(child_pid);
+                crate::task::scheduler::SCHEDULER.lock().remove_task(main_task_id);
                 return Ok((child_pid, status));
             } else {
-                // All children are still running -> block caller
-                if let Some(caller) = self.processes.iter_mut().find(|p| p.pid == caller_pid) {
-                    caller.state = ProcessState::Blocked;
-                    caller.waiting_target_pid = Some(None);
-                    crate::task::set_task_state(caller.main_task_id, TaskState::Blocked);
+                // All children are still running -> block caller unless nohang
+                if !nohang {
+                    if let Some(caller) = self.processes.iter_mut().find(|p| p.pid == caller_pid) {
+                        caller.state = ProcessState::Blocked;
+                        caller.waiting_target_pid = Some(None);
+                        crate::task::set_task_state(caller.main_task_id, TaskState::Blocked);
+                    }
                 }
                 return Err(WaitError::WouldBlock);
+            }
+        }
+    }
+
+    pub fn reap_orphans(&mut self) {
+        let mut to_remove = alloc::vec::Vec::new();
+        
+        for p in self.processes.iter() {
+            if p.ppid == 1 && p.is_orphan && p.state == ProcessState::Zombie {
+                to_remove.push(p.pid);
+            }
+        }
+        
+        for pid in to_remove {
+            if let Some(idx) = self.processes.iter().position(|p| p.pid == pid) {
+                let main_task_id = self.processes[idx].main_task_id;
+                self.processes[idx].address_space.unmap_all();
+                self.processes.remove(idx);
+                self.pid_allocator.deallocate(pid);
+                crate::task::scheduler::SCHEDULER.lock().remove_task(main_task_id);
             }
         }
     }

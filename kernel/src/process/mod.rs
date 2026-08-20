@@ -38,9 +38,9 @@ pub fn current_pid() -> usize {
     crate::task::current_process_id()
 }
 
-pub fn waitpid(caller_pid: usize, target: Option<usize>) -> Result<(usize, i32), WaitError> {
+pub fn waitpid(caller_pid: usize, target: Option<usize>, nohang: bool) -> Result<(usize, i32), WaitError> {
     x86_64::instructions::interrupts::without_interrupts(|| {
-        PROCESS_TABLE.lock().waitpid(caller_pid, target)
+        PROCESS_TABLE.lock().waitpid(caller_pid, target, nohang)
     })
 }
 

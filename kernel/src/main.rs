@@ -86,11 +86,6 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let mut shell = Shell::new();
     shell.print_banner(&mut text);
     crate::drivers::storage::serial_print("NOVA> [MAIN] banner printed\n");
-    crate::tty::TTY.lock().try_push_line("nslookup example.com");
-    crate::tty::TTY.lock().try_push_line("curl http://example.com/");
-    crate::tty::TTY.lock().try_push_line("run /bin/hello");
-    crate::tty::TTY.lock().try_push_line("ping 10.0.2.2");
-    crate::tty::TTY.lock().try_push_line("poweroff");
 
     // Drop into interactive shell
 
@@ -108,6 +103,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             shell.execute_line(&line, &mut text);
             had_work = true;
         }
+
+        // Auto-reap any zombies reparented to init (orphans)
+        crate::process::PROCESS_TABLE.lock().reap_orphans();
 
         if !had_work {
             x86_64::instructions::interrupts::enable();

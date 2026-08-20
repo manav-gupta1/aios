@@ -21,11 +21,15 @@ pub struct Shell {
 }
 
 impl Shell {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             jobs: Vec::new(),
             next_job_id: 1,
         }
+    }
+
+    pub fn remove_job_by_pgid(&mut self, pgid: usize) {
+        self.jobs.retain(|j| j.pgid != pgid);
     }
 
     pub fn print_banner(&self, text: &mut TextWriter) {
@@ -385,6 +389,8 @@ impl Shell {
                             text.write_str("\n[");
                             write_u32(job_id as u32, text);
                             text.write_str("] Stopped\n");
+                        } else {
+                            let _ = crate::process::PROCESS_TABLE.lock().waitpid(1, Some(child_pid), true);
                         }
                         break;
                     }
@@ -424,7 +430,7 @@ impl Shell {
         };
 
         // Caller is PID 1 (shell / init)
-        match crate::process::waitpid(1, target_pid) {
+        match crate::process::PROCESS_TABLE.lock().waitpid(1, target_pid, false) {
             Ok((child_pid, status)) => {
                 text.set_color(80, 220, 120);
                 text.write_str("Child process ");
@@ -468,6 +474,7 @@ impl Shell {
                 Some(p) if p.state == ProcessState::Zombie => {
                     text.set_color(80, 220, 120);
                     text.write_str("Completed ");
+                    let _ = crate::process::PROCESS_TABLE.lock().waitpid(1, Some(job.pgid), true);
                     to_remove.push(i);
                 },
                 Some(_) => {
@@ -541,6 +548,8 @@ impl Shell {
                     text.write_str("\n[");
                     write_u32(job.id as u32, text);
                     text.write_str("] Stopped\n");
+                } else if state == Some(crate::process::ProcessState::Zombie) {
+                    let _ = crate::process::PROCESS_TABLE.lock().waitpid(1, Some(job.pgid), true);
                 }
                 break;
             }
@@ -1313,6 +1322,7 @@ impl Shell {
                         || state.is_none();
 
                     if is_finished {
+                        let _ = crate::process::PROCESS_TABLE.lock().waitpid(1, Some(child_pid), true);
                         break;
                     }
 

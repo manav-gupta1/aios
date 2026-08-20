@@ -106,6 +106,19 @@ impl Scheduler {
         }
     }
 
+    pub fn remove_task(&mut self, task_id: usize) {
+        if let Some(idx) = self.tasks.iter().position(|t| t.id.0 == task_id) {
+            self.tasks.remove(idx);
+            if idx < self.current_index {
+                self.current_index -= 1;
+            } else if idx == self.current_index {
+                if self.current_index >= self.tasks.len() {
+                    self.current_index = 0;
+                }
+            }
+        }
+    }
+
     pub fn reset_task_user_context(
         &mut self,
         task_id: usize,
